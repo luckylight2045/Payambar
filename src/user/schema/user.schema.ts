@@ -3,6 +3,11 @@ import { HydratedDocument } from 'mongoose';
 
 export type UserDocument = HydratedDocument<User>;
 
+export enum UserRole {
+  ADMIN = 'admin',
+  USER = 'user',
+}
+
 @Schema()
 export class User {
   @Prop({ unique: true, required: true })
@@ -14,7 +19,7 @@ export class User {
   @Prop({ required: false })
   lastName: string;
 
-  @Prop({ required: false, unique: true })
+  @Prop({ required: false, unique: true, sparse: true })
   email: string;
 
   @Prop({ required: false, unique: true })
@@ -22,6 +27,9 @@ export class User {
 
   @Prop({ required: true })
   password: string;
+
+  @Prop({ enum: UserRole, default: UserRole.USER })
+  role: UserRole;
 
   @Prop({ default: Date.now, timestamp: true })
   createdAt: Date;
@@ -34,3 +42,11 @@ export class User {
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
+
+UserSchema.index(
+  { email: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { email: { $exists: true, $ne: null } },
+  },
+);

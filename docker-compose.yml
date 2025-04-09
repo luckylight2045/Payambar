@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   nestjs-app:
     build:
@@ -12,8 +10,11 @@ services:
       - NODE_ENV=development
     volumes:
       - ./src:/usr/src/app/src
+    networks:
+      - node-network
     depends_on:
       - mongo
+
   mongo:
     image: mongo:latest
     container_name: mongo_container
@@ -25,7 +26,13 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: password
     volumes:
       - mongo_data:/data/db
+    networks:
+      - node-network
 
 volumes:
   mongo_data:
     driver: local
+
+networks:
+  node-network:
+    driver: bridge
