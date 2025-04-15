@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { User } from './schema/user.schema';
+import { User, UserRole } from './schema/user.schema';
 import { Model } from 'mongoose';
 import { UserSignUpDto } from './dtos/user.signup.dto';
 import * as bcrypt from 'bcrypt';
@@ -17,6 +17,7 @@ export class UserService {
       userName: body.userName,
       password: hash,
       phoneNumber: body.phoneNumber,
+      role: body.role || UserRole.USER,
     });
 
     return user;

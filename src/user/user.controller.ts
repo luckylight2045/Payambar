@@ -5,6 +5,9 @@ import { UserSignUpDto } from './dtos/user.signup.dto';
 import { UserLoginDto } from './dtos/user.login.dto';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
+import { Roles } from 'src/decorators/roles.decorator';
+import { UserRole } from './schema/user.schema';
+import { RolesGuard } from 'src/auth/roles.guard';
 @Controller('users')
 export class UserController {
   constructor(
@@ -26,7 +29,8 @@ export class UserController {
   }
 
   @ApiBearerAuth('access-token')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Get('')
   async getAllUsers() {
     return this.userService.getAllUsers();

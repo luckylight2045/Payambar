@@ -11,6 +11,12 @@ import { ConfigModule } from '@nestjs/config';
     MongooseModule.forRoot('mongodb://admin:password@localhost:27017/', {
       dbName: 'mongo',
       autoIndex: true,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+      connectTimeoutMS: 30000,
+      maxPoolSize: 10,
+      minPoolSize: 2,
+      waitQueueTimeoutMS: 5000,
     }),
     UserModule,
     AuthModule,
