@@ -26,7 +26,7 @@ export class AuthService {
     const validatePass = await bcrypt.compare(password, user.password);
 
     if (!validatePass) {
-      throw new BadRequestException();
+      throw new BadRequestException('password is wrong');
     }
 
     return this.jwtSign(username, password);

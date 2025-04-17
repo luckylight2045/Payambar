@@ -9,17 +9,20 @@ import {
 import { UserRole } from '../schema/user.schema';
 
 export class UserSignUpDto {
-  @ApiProperty()
+  @ApiProperty({ example: 'john', description: 'unique userName' })
   @IsString()
   @IsNotEmpty()
   userName: string;
 
-  @ApiProperty()
+  @ApiProperty({ example: 'password', description: 'any password' })
   @IsString()
   @IsNotEmpty()
   password: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    example: '09335910559',
+    description: 'phoneNumber should be 11 numbers ',
+  })
   @IsString()
   @IsNotEmpty()
   @Matches(/^\d{11}$/, {
@@ -28,7 +31,7 @@ export class UserSignUpDto {
   })
   phoneNumber: string;
 
-  @ApiProperty()
+  @ApiProperty({ example: 'user', description: 'should be user or adminI' })
   @IsEnum(UserRole)
   @IsOptional()
   role: UserRole;
