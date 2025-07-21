@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { User } from './schema/user.schema';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { UserSignUpDto } from './dtos/user.signup.dto';
 import * as bcrypt from 'bcrypt';
 import { UserUpdateDto } from './dtos/user.update.dto';
@@ -107,6 +107,10 @@ export class UserService {
   }
 
   async deleteUser(userId: string) {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new BadRequestException('Invalid userId');
+    }
+
     if (await this.getUserById(userId)) {
       throw new NotFoundException('user is not found');
     }
