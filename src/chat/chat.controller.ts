@@ -5,7 +5,7 @@ import { HydratedDocument } from 'mongoose';
 import { User } from 'src/user/schema/user.schema';
 import { ChatService } from './chat.service';
 
-@Controller()
+@Controller('chats')
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 

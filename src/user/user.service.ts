@@ -108,13 +108,14 @@ export class UserService {
 
   async deleteUser(userId: string) {
     if (!Types.ObjectId.isValid(userId)) {
-      throw new BadRequestException('Invalid userId');
+      throw new BadRequestException('Invalid UserId');
     }
+    const objectId = new Types.ObjectId(userId);
 
-    if (await this.getUserById(userId)) {
+    if (!(await this.getUserById(userId))) {
       throw new NotFoundException('user is not found');
     }
 
-    await this.user.deleteOne({ _id: userId });
+    await this.user.deleteOne({ _id: objectId });
   }
 }
