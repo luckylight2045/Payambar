@@ -22,6 +22,5 @@ global.send = send;
 
 import repl from 'repl';
 
-// expose `send` in the REPL context
 const r = repl.start({ prompt: 'B> ' });
 r.context.send = send;

@@ -14,7 +14,6 @@ socket.on('receive_message', (msg) => {
   console.log('A got:', msg);
 });
 
-// helper to send
 function send(msg) {
   socket.emit('send_message', msg);
 }
@@ -23,6 +22,5 @@ global.send = send;
 
 import repl from 'repl';
 
-// expose `send` in the REPL context
 const r = repl.start({ prompt: 'A> ' });
 r.context.send = send;
