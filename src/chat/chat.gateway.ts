@@ -48,13 +48,14 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleMessage(
     @MessageBody()
     data: CreateMessageDto & {
-      conversationId: string;
+      conversationId?: string;
       senderId: string;
-      participantIds: string[];
+      participantIds?: string[];
     },
     @ConnectedSocket() client: ChatSocket,
   ): Promise<void> {
-    const clientUserId = client.handshake.query.userId;
+    const clientUserId = client.handshake.query.userId as string;
+
     if (clientUserId !== data.senderId) {
       throw new Error('Unauthorized sender');
     }
@@ -62,8 +63,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const message = await this.chatService.createMessage(data);
 
     const participants = await this.chatService.getConversationParticipants(
-      data.conversationId,
+      message.conversationId.toString(),
     );
+
     for (const pid of participants) {
       if (pid !== data.senderId) {
         const sockets = this.onlineUsers.get(pid) || [];

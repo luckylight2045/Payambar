@@ -53,7 +53,7 @@ export class ChatService {
     } else {
       if (!participantIds || participantIds.length < 1) {
         throw new BadRequestException(
-          'participantIds shoule exist when conversation does not exist',
+          'participantIds should exist when conversation does not exist',
         );
       }
       const participants = [...new Set([senderId, ...participantIds])];
