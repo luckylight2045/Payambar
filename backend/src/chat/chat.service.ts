@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -71,6 +72,30 @@ export class ChatService {
   async getConversationParticipants(conversationId: string) {
     return await this.conversationService.getConversationParticipants(
       conversationId,
+    );
+  }
+
+  async getMessageForConversation(
+    conversationId: string,
+    userId: string,
+    options: { limit: number; skip?: number; beforeDate?: Date },
+  ) {
+    if (!(await this.conversationService.getConversationById(conversationId))) {
+      throw new NotFoundException('this conversation does not exist');
+    }
+
+    const participants =
+      await this.conversationService.getConversationParticipants(
+        conversationId,
+      );
+    if (!participants.includes(userId)) {
+      throw new ForbiddenException(
+        'the user is not authorized to access the conversation',
+      );
+    }
+    return await this.messageService.getMessagesForConversation(
+      conversationId,
+      options,
     );
   }
 }

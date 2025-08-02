@@ -1,8 +1,0 @@
-// frontend/jsconfig.json
-{
-    "compilerOptions": {
-      "allowJs": true
-    },
-    "exclude": ["node_modules", "../node_modules", "**/*.ts"]
-  }
-  

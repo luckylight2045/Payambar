@@ -2,8 +2,10 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
   Param,
   Post,
+  Query,
   UseGuards,
   UsePipes,
   ValidationPipe,
@@ -14,9 +16,12 @@ import { HydratedDocument } from 'mongoose';
 import { User } from 'src/user/schema/user.schema';
 import { ChatService } from './chat.service';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
+import { GetMessagesQueryDto } from './dtos/get-messages-query.dto';
+import { ApiBearerAuth } from '@nestjs/swagger';
 
 @UseGuards(JwtAuthGuard)
-@UsePipes(new ValidationPipe({ whitelist: true }))
+@ApiBearerAuth('access-token')
+@UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
 @Controller('chats')
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
@@ -70,5 +75,22 @@ export class ChatController {
       senderId: user._id.toString(),
       participantIds,
     });
+  }
+
+  @Get('conversations/:conversationId/messages')
+  async getMessages(
+    @Param('conversationId') conversationId: string,
+    @CurrentUser() user: HydratedDocument<User>,
+    @Query() query: GetMessagesQueryDto,
+  ) {
+    return this.chatService.getMessageForConversation(
+      conversationId,
+      user._id.toString(),
+      {
+        limit: query.limit,
+        skip: query.skip,
+        beforeDate: query.beforeDate,
+      },
+    );
   }
 }
