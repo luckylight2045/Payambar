@@ -11,7 +11,7 @@ export enum UserRole {
 @Schema()
 export class User {
   @Prop({ unique: true, required: true })
-  userName: string;
+  name: string;
 
   @Prop({ required: false })
   firstName: string;
@@ -39,6 +39,9 @@ export class User {
 
   @Prop({ default: true })
   isActive: boolean;
+
+  @Prop({ type: String, default: null })
+  refreshToken: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

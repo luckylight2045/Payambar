@@ -14,6 +14,7 @@ services:
       - node-network
     depends_on:
       - mongo
+      - redis
 
   mongo:
     image: mongo:latest
@@ -34,6 +35,15 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  redis: 
+    image: redis:7-alpine
+    container_name: redis_container
+    restart: always
+    ports: 
+      - "6379:6379"
+    networks:
+      - node-network
 
 volumes:
   mongo_data:

@@ -34,7 +34,7 @@ export class UserService {
     return obj;
   }
 
-  async getUserByUserName(userName: string): Promise<User | null> {
+  async getUserByUserName(userName: string) {
     return await this.user.findOne({ userName }).exec();
   }
 
@@ -54,10 +54,18 @@ export class UserService {
     return await this.user.findOne({ email });
   }
 
+  async storeRefreshToken(userId: string, refreshToken: string) {
+    await this.user.findByIdAndUpdate(userId, { refreshToken }).exec();
+  }
+
+  async logout(userId: string) {
+    await this.user.findByIdAndUpdate(userId, { refreshToken: null }).exec();
+  }
+
   async updateUser(user: User, body: UserUpdateDto) {
     if (
       body.userName &&
-      body.userName != user.userName &&
+      body.userName != user.name &&
       (await this.getUserByUserName(body.userName))
     ) {
       throw new BadRequestException('userName is already taken');
@@ -87,7 +95,7 @@ export class UserService {
 
     const userDoc = await this.user
       .findOneAndUpdate(
-        { userName: user.userName },
+        { userName: user.name },
         { ...body, password: body.password ? hash : user.password },
         {
           new: true,
@@ -97,7 +105,7 @@ export class UserService {
       .exec();
 
     if (!userDoc) {
-      throw new NotFoundException(`User ${user.userName} not found`);
+      throw new NotFoundException(`User ${user.name} not found`);
     }
 
     const obj = userDoc.toObject() as unknown as SafeUser;

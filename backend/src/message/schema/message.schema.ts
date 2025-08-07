@@ -26,6 +26,12 @@ export class Message {
   @Prop({ default: false })
   isRead: boolean;
 
+  @Prop({ type: Date, default: null })
+  deliveredAt?: Date;
+
+  @Prop({ type: Date, default: null })
+  readAt?: Date;
+
   @Prop({ default: Date.now, timestamp: true })
   createdAt: Date;
 
