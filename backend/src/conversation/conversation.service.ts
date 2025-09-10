@@ -3,12 +3,14 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Conversation, ConversationType } from './schema/conversation.schema';
 import { Model, Types } from 'mongoose';
 import { CreateConversationDto } from './dtos/create.conversation.dto';
+import { HydratedDocument } from 'mongoose';
 
+export type ConversationDocument = HydratedDocument<Conversation>;
 @Injectable()
 export class ConversationService {
   constructor(
     @InjectModel(Conversation.name)
-    private readonly conversation: Model<Conversation>,
+    private readonly conversation: Model<ConversationDocument>,
   ) {}
 
   async getConversationById(conversationId: string) {
@@ -74,15 +76,15 @@ export class ConversationService {
 
   async findPrivateBetween(
     participants: string[],
-  ): Promise<Conversation | null> {
+  ): Promise<ConversationDocument | null> {
     const oids = participants.map((p) =>
       Types.ObjectId.isValid(p) ? new Types.ObjectId(p) : p,
     );
-    return await this.conversation
+    return this.conversation
       .findOne({
         type: ConversationType.PRIVATE,
         participants: { $all: oids, $size: oids.length },
       })
-      .exec();
+      .exec() as Promise<ConversationDocument | null>;
   }
 }

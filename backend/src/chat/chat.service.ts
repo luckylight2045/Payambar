@@ -4,11 +4,14 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Message } from 'src/message/schema/message.schema';
 import { CreateMessageDto } from './dtos/create-message.dto';
-import { ConversationService } from 'src/conversation/conversation.service';
+import {
+  ConversationDocument,
+  ConversationService,
+} from 'src/conversation/conversation.service';
 import { MessageService } from 'src/message/message.service';
 import { ConversationType } from 'src/conversation/schema/conversation.schema';
+import { MessageDocument } from 'src/message/schema/message.schema';
 
 @Injectable()
 export class ChatService {
@@ -23,7 +26,7 @@ export class ChatService {
       senderId: string;
       participantIds?: string[];
     },
-  ): Promise<Message> {
+  ): Promise<MessageDocument> {
     const { senderId, conversationId, participantIds, messageType, content } =
       data;
 
@@ -54,6 +57,8 @@ export class ChatService {
         savedMessage.conversationId.toString(),
         savedMessage._id.toString(),
       );
+
+      return savedMessage;
     }
 
     if (!participantIds || participantIds.length < 1) {
@@ -65,6 +70,32 @@ export class ChatService {
     const participants = [
       ...new Set([senderId, ...participantIds.map(String)]),
     ];
+
+    const existing =
+      await this.conversationService.findPrivateBetween(participants);
+    let conv: ConversationDocument;
+    if (existing) {
+      conv = existing;
+    } else {
+      conv = await this.conversationService.createConversation({
+        type: ConversationType.PRIVATE,
+        participants,
+      });
+    }
+
+    const savedMessage = await this.messageService.createMessage({
+      messageType,
+      content,
+      senderId,
+      conversationId: conv._id.toString(),
+    });
+
+    await updateConvLastMessage(
+      savedMessage.conversationId.toString(),
+      savedMessage._id.toString(),
+    );
+
+    return savedMessage;
   }
 
   async getConversationParticipants(conversationId: string) {
