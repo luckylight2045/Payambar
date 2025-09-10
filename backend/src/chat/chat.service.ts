@@ -27,46 +27,44 @@ export class ChatService {
     const { senderId, conversationId, participantIds, messageType, content } =
       data;
 
+    const updateConvLastMessage = async (convId: string, messageId: string) => {
+      await this.conversationService.updateLastMessage(convId, messageId);
+    };
+
     if (conversationId) {
-      const conversation =
-        await this.conversationService.getConversationById(conversationId);
+      const isMember = await this.conversationService.isParticipant(
+        conversationId,
+        senderId,
+      );
 
-      if (!conversation) {
-        throw new NotFoundException('related conversation does not exist');
-      }
-
-      if (
-        !conversation.participants
-          .map((participant) => participant.toString())
-          .includes(senderId)
-      ) {
-        throw new BadRequestException(
-          'Sender is not a participant in this conversation',
+      if (!isMember) {
+        throw new ForbiddenException(
+          'sender is not a participant in this conversation',
         );
       }
 
-      return await this.messageService.createMessage({
+      const savedMessage = await this.messageService.createMessage({
         messageType,
         content,
         senderId,
         conversationId,
       });
-    } else {
-      if (!participantIds || participantIds.length < 1) {
-        throw new BadRequestException(
-          'participantIds should exist when conversation does not exist',
-        );
-      }
-      const participants = [...new Set([senderId, ...participantIds])];
-      const newConv = await this.conversationService.createConversation({
-        type: ConversationType.PRIVATE,
-        participants,
-      });
-      return await this.messageService.createMessage({
-        ...data,
-        conversationId: newConv._id.toString(),
-      });
+
+      await updateConvLastMessage(
+        savedMessage.conversationId.toString(),
+        savedMessage._id.toString(),
+      );
     }
+
+    if (!participantIds || participantIds.length < 1) {
+      throw new BadRequestException(
+        'participantIds should exist when conversation does not exist',
+      );
+    }
+
+    const participants = [
+      ...new Set([senderId, ...participantIds.map(String)]),
+    ];
   }
 
   async getConversationParticipants(conversationId: string) {
@@ -97,5 +95,22 @@ export class ChatService {
       conversationId,
       options,
     );
+  }
+
+  async getConversationForUser(userId: string) {
+    return await this.conversationService.listConversationForUser(userId);
+  }
+
+  async createConversation(userId: string, participantIds: string[]) {
+    const conversation =
+      await this.conversationService.getPrivateConversation(userId);
+
+    if (conversation) {
+      return conversation;
+    }
+    return await this.conversationService.createConversation({
+      type: ConversationType.PRIVATE,
+      participants: [userId, ...participantIds],
+    });
   }
 }

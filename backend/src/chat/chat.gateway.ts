@@ -5,74 +5,249 @@ import {
   ConnectedSocket,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
+  WebSocketServer,
 } from '@nestjs/websockets';
-import { Socket } from 'socket.io';
-import { Handshake } from 'socket.io/dist/socket-types';
+import { Server, Socket } from 'socket.io';
 import { ChatService } from './chat.service';
 import { CreateMessageDto } from './dtos/create-message.dto';
+import { InjectRedis } from '@nestjs-modules/ioredis';
+import Redis from 'ioredis';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import { Logger, NotFoundException } from '@nestjs/common';
+import { createClient as createNodeRedisClient } from 'redis';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { JwtPayload } from 'src/auth/interfaces/jwt.payload';
+import { UserService } from 'src/user/user.service';
 
-interface ChatSocket extends Socket {
-  handshake: Handshake & { query: { userId?: string } };
-}
+type AuthSocket = Socket<any, any, any, { userId?: string }>;
 
 @WebSocketGateway({ cors: true })
-export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
-  constructor(private readonly chatService: ChatService) {}
-  private onlineUsers = new Map<string, string[]>();
+export class ChatGateway
+  implements OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit
+{
+  @WebSocketServer() server: Server;
+  private readonly logger = new Logger('ChatGateway');
 
-  handleConnection(client: ChatSocket) {
-    const userId = client.handshake.query.userId;
-    if (userId) {
-      const sockets = this.onlineUsers.get(userId) || [];
-      sockets.push(client.id);
-      this.onlineUsers.set(userId, sockets);
-      client.broadcast.emit('user_connected', { userId });
+  constructor(
+    private readonly chatService: ChatService,
+    private readonly configService: ConfigService,
+    private readonly jwtService: JwtService,
+    private readonly userService: UserService,
+    @InjectRedis() private readonly ioredis: Redis,
+  ) {}
+
+  async afterInit() {
+    const pubClient = createNodeRedisClient({
+      url: this.configService.get<string>('REDIS_URL'),
+    });
+    const subClient = pubClient.duplicate();
+
+    await pubClient.connect();
+    await subClient.connect();
+
+    this.server.adapter(createAdapter(pubClient, subClient));
+    this.logger.log('Socket.io Redis adapter configured');
+  }
+
+  async handleConnection(client: AuthSocket) {
+    const auth = client.handshake?.auth as unknown;
+
+    const maybeToken =
+      auth && typeof (auth as Record<string, unknown>)['token'] === 'string'
+        ? (auth as Record<string, string>)['token']
+        : undefined;
+
+    if (typeof maybeToken !== 'string') {
+      this.logger.warn(`socket ${client.id} connected without token`);
+      client.emit('error', 'Authentication required');
+      client.disconnect(true);
+      return;
+    }
+
+    const token = maybeToken.replace(/^Bearer\s+/i, '');
+
+    try {
+      const payload = this.jwtService.verify<JwtPayload>(token, {
+        secret: this.configService.get<string>('ACCESS_TOKEN_SECRET_KEY'),
+      });
+
+      const user = await this.userService.getUserByUserName(payload.userName);
+
+      if (!user) {
+        throw new NotFoundException('user is not found');
+      }
+
+      const userId = user._id.toString();
+
+      client.data.userId = userId;
+      await this.ioredis.sadd(`online:${userId}`, client.id);
+      await this.ioredis.set(`socket:${client.id}`, userId);
+    } catch (err) {
+      this.logger.warn(
+        `Socket ${client.id} auth failed: ${(err as Error).message}`,
+      );
+      client.emit('error', 'Authentication failed');
+      client.disconnect(true);
     }
   }
 
-  handleDisconnect(client: ChatSocket) {
-    const userId = client.handshake.query.userId;
-    if (userId) {
-      const sockets = this.onlineUsers.get(userId) || [];
-      const updatedSockets = sockets.filter((sid) => sid != client.id);
-      if (updatedSockets.length == 0) {
-        this.onlineUsers.delete(userId);
-        client.broadcast.emit('user_disconnected', { userId });
-      } else {
-        this.onlineUsers.set(userId, updatedSockets);
+  async handleDisconnect(client: AuthSocket) {
+    const socketId = client.id;
+    const userId =
+      client.data.userId ?? (await this.ioredis.get(`socket:${socketId}`));
+
+    if (typeof userId !== 'string') {
+      this.logger.debug(
+        `Disconnected socket ${socketId} had no associated user`,
+      );
+      return;
+    }
+
+    await this.ioredis.srem(`online:${userId}`, socketId);
+    await this.ioredis.del(`socket:${socketId}`);
+
+    const remaining = await this.ioredis.scard(`online:${userId}`);
+    if (remaining === 0) {
+      this.server.emit('user_disconnected', { userId });
+      this.logger.log(`User ${userId} is now offline`);
+    } else {
+      this.logger.log(
+        `Socket ${socketId} removed for user ${userId}. ${remaining} sockets remain.`,
+      );
+    }
+  }
+
+  private async notifyUser(
+    userId: string,
+    event: string,
+    payload: any,
+    excludeRoom?: string,
+  ) {
+    const sockets = await this.ioredis.smembers(`online:${userId}`);
+    if (!sockets || sockets.length === 0) return;
+
+    const excluded = new Set<string>();
+    if (excludeRoom) {
+      const room = this.server.sockets.adapter.rooms.get(excludeRoom);
+      if (room) {
+        for (const sid of room) excluded.add(sid);
       }
     }
+
+    for (const sid of sockets) {
+      if (excluded.has(sid)) continue;
+      this.server.to(sid).emit(event, payload);
+    }
+  }
+
+  @SubscribeMessage('join_conversation')
+  async handleJoinConversation(
+    @MessageBody() data: { conversationId: string },
+    @ConnectedSocket() client: AuthSocket,
+  ) {
+    const userId = client.data.userId;
+    if (typeof userId !== 'string') {
+      client.emit('error', 'Unauthenticated');
+      return;
+    }
+    const convId = data?.conversationId;
+    if (typeof convId !== 'string') {
+      client.emit('error', 'conversationId required');
+      return;
+    }
+
+    await client.join(convId);
+    this.logger.debug(`User ${userId} joined room ${convId}`);
+  }
+
+  async handleLeaveConversation(
+    @MessageBody() data: { conversationId: string },
+    @ConnectedSocket() client: AuthSocket,
+  ) {
+    const userId = client.data.userId;
+    if (typeof userId !== userId) {
+      client.emit('error', 'unauthenticated');
+      return;
+    }
+
+    const convId = data?.conversationId;
+    if (typeof convId !== 'string') {
+      client.emit('error', 'conversationId required');
+      return;
+    }
+
+    await client.leave(convId);
+    this.logger.debug(`User ${userId} left room ${convId}`);
   }
 
   @SubscribeMessage('send_message')
-  async handleMessage(
+  async handleSendMessage(
     @MessageBody()
     data: CreateMessageDto & {
       conversationId?: string;
-      senderId: string;
       participantIds?: string[];
     },
-    @ConnectedSocket() client: ChatSocket,
-  ): Promise<void> {
-    const clientUserId = client.handshake.query.userId as string;
-
-    if (clientUserId !== data.senderId) {
-      throw new Error('Unauthorized sender');
+    @ConnectedSocket() client: AuthSocket,
+  ) {
+    const senderId = client.data.userId;
+    if (typeof senderId !== 'string') {
+      client.emit('error', 'Unauthenticated');
+      return;
     }
 
-    const message = await this.chatService.createMessage(data);
+    if (typeof data?.content !== 'string' || data.content.trim().length === 0) {
+      client.emit('error', 'content required');
+      return;
+    }
 
-    const participants = await this.chatService.getConversationParticipants(
-      message.conversationId.toString(),
-    );
+    try {
+      const saved = await this.chatService.createMessage({
+        conversationId: data.conversationId,
+        participantIds: data.participantIds,
+        senderId,
+        content: data.content,
+        messageType: data.messageType,
+      });
 
-    for (const pid of participants) {
-      if (pid !== data.senderId) {
-        const sockets = this.onlineUsers.get(pid) || [];
-        for (const sid of sockets) {
-          client.to(sid).emit('receive_message', message);
-        }
+      const convId = saved.conversationId.toString();
+
+      client.to(convId).emit('receive_message', saved);
+      client.emit('message_sent', saved);
+
+      const participants =
+        await this.chatService.getConversationParticipants(convId);
+      for (const pid of participants) {
+        if (pid === senderId) continue;
+        await this.notifyUser(pid, 'receive_message', saved, convId);
       }
+    } catch (err) {
+      this.logger.warn(
+        `Failed to send message from ${senderId}: ${(err as Error).message}`,
+      );
+      client.emit('error', (err as Error).message || 'send failed');
     }
+  }
+
+  @SubscribeMessage('typing')
+  handleTyping(
+    @MessageBody() data: { conversationId: string; isTyping: boolean },
+    @ConnectedSocket() client: AuthSocket,
+  ) {
+    const senderId = client.data.userId;
+    if (typeof senderId !== 'string') {
+      client.emit('error', 'Unauthenticated');
+      return;
+    }
+
+    const convId = data?.conversationId;
+    if (typeof convId !== 'string') return;
+
+    client.to(convId).emit('typing', {
+      conversationId: convId,
+      userId: senderId,
+      isTyping: !!data.isTyping,
+    });
   }
 }

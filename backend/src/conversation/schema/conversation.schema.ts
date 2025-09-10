@@ -21,6 +21,12 @@ export class Conversation {
 
   @Prop({ type: Types.ObjectId, required: false })
   lastMessage?: Types.ObjectId;
+
+  @Prop({ default: Date.now, timestamp: true })
+  createdAt: Date;
+
+  @Prop({ default: Date.now, timestamp: true })
+  updatedAt: Date;
 }
 
 export const ConversationSchema = SchemaFactory.createForClass(Conversation);

@@ -1,6 +1,15 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { MessageType } from 'src/message/schema/message.schema';
 
-export interface CreateMessageDto {
+export class CreateMessageDto {
+  @ApiPropertyOptional({ example: 'hello' })
+  @IsString()
+  @IsNotEmpty()
   content: string;
-  messageType: MessageType;
+
+  @ApiPropertyOptional({ enum: MessageType })
+  @IsEnum(MessageType)
+  @IsOptional()
+  messageType?: MessageType;
 }

@@ -35,6 +35,7 @@ export class AuthService {
 
   async jwtSign(username: string, userId: string) {
     const payload = {
+      sub: userId,
       userName: username,
     };
 

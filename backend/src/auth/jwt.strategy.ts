@@ -4,10 +4,7 @@ import { ExtractJwt } from 'passport-jwt';
 import { Strategy } from 'passport-jwt';
 import { User } from 'src/user/schema/user.schema';
 import { UserService } from 'src/user/user.service';
-
-interface Payload {
-  userName: string;
-}
+import { JwtPayload } from './interfaces/jwt.payload';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -19,7 +16,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: Payload): Promise<User> {
+  async validate(payload: JwtPayload): Promise<User> {
     const user = await this.userService.getUserByUserName(payload.userName);
     if (!user) {
       throw new UnauthorizedException();

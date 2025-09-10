@@ -8,6 +8,7 @@ services:
     environment:
       - PORT=3000
       - NODE_ENV=development
+      - REDIS_URL=redis://redis:6379
     volumes:
       - ./src:/usr/src/app/src
     networks:

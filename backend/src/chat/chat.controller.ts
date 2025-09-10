@@ -93,4 +93,19 @@ export class ChatController {
       },
     );
   }
+
+  @Get('conversations')
+  async getChats(@CurrentUser() user: HydratedDocument<User>) {
+    return await this.chatService.getConversationForUser(user._id.toString());
+  }
+
+  @Post('conversations/private/:otherUserId')
+  async getOrCreateConversation(
+    @CurrentUser() user: HydratedDocument<User>,
+    @Param('otherUserId') otherUserId: string,
+  ) {
+    return await this.chatService.createConversation(user._id.toString(), [
+      otherUserId,
+    ]);
+  }
 }
