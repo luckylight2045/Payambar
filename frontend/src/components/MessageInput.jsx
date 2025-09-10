@@ -1,31 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState } from 'react'
 
-function MessageInput({ sendMessage }) {
-  const [content, setContent] = useState('');
-
+export default function MessageInput({ sendMessage }){
+  const [content, setContent] = useState('')
   const handleSend = () => {
-    if (content.trim()) {
-      sendMessage(content);
-      setContent('');
+    if (content.trim()){
+      sendMessage(content.trim())
+      setContent('')
     }
-  };
-
+  }
   return (
-    <div className="p-4 bg-white border-t flex">
-      <input
-        type="text"
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-        className="flex-1 p-2 border rounded"
-      />
-      <button
-        onClick={handleSend}
-        className="ml-2 p-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-      >
-        Send
-      </button>
+    <div className="message-input">
+      <input value={content} onChange={e=>setContent(e.target.value)} placeholder="Type a message" />
+      <button onClick={handleSend}>Send</button>
     </div>
-  );
+  )
 }
-
-export default MessageInput;
