@@ -226,7 +226,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         return participantNameMap[p] ?? String(p).slice(0,6);
       }
     }
-    return 'SavedMessage';
+    return 'SavedMessages';
   };
 
   return (
