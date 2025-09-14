@@ -12,7 +12,7 @@ export class UserSignUpDto {
   @ApiProperty({ example: 'john', description: 'unique userName' })
   @IsString()
   @IsNotEmpty()
-  userName: string;
+  name: string;
 
   @ApiProperty({ example: 'password', description: 'any password' })
   @IsString()

@@ -41,7 +41,10 @@ export class MessageService {
       filter.createdAt = { $lt: options.beforeDate };
     }
 
-    let query = this.message.find(filter).sort({ createdAt: -1 });
+    let query = this.message
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .populate({ path: 'senderId', select: 'name' });
 
     if (!options.beforeDate && options.skip !== undefined) {
       query = query.skip(options.skip);

@@ -44,12 +44,14 @@ export class ConversationService {
       .sort({ updatedAt: -1 })
       .populate({
         path: 'participants',
-        select: 'userName',
+        select: 'name',
       })
       .populate({
         path: 'lastMessage',
         select: 'content senderId createdAt messageType',
+        populate: { path: 'senderId', select: 'name' },
       })
+      .lean()
       .exec();
   }
 

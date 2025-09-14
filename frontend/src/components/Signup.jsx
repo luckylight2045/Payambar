@@ -11,7 +11,7 @@ export default function Signup(){
 
   const handleSignup = async () => {
     try {
-      await axios.post('http://localhost:3000/users/signup', { userName: username, password, phoneNumber, role })
+      await axios.post('http://localhost:3000/users/signup', { name: username, password, phoneNumber, role })
       alert('Signup successful! Please login.')
       navigate('/login')
     } catch (e) {

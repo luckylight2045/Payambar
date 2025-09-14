@@ -5,7 +5,14 @@ import { ValidationPipe } from '@nestjs/common';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  app.enableCors();
+
+  // Configure CORS to allow the frontend origin and credentials
+  app.enableCors({
+    origin: 'http://localhost:5173', // Match your frontend URL
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    credentials: true, // Allow cookies or Authorization headers
+  });
+
   app.useGlobalPipes(
     new ValidationPipe({
       transform: true,
@@ -14,7 +21,7 @@ async function bootstrap() {
 
   const config = new DocumentBuilder()
     .setTitle('Payambar')
-    .setDescription('payambar API')
+    .setDescription('Payambar API')
     .setVersion('1.0')
     .addTag('payambar')
     .addBearerAuth(
@@ -27,8 +34,9 @@ async function bootstrap() {
     )
     .build();
 
-  const docuemntFactory = () => SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api', app, docuemntFactory);
+  const documentFactory = () => SwaggerModule.createDocument(app, config); // Fixed typo 'docuemntFactory' to 'documentFactory'
+  SwaggerModule.setup('api', app, documentFactory);
+
   await app.listen(process.env.PORT ?? 3000);
 }
 

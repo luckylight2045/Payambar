@@ -1,31 +1,37 @@
-import { useEffect, useRef } from 'react'
-import { io } from 'socket.io-client'
+/* eslint-disable no-empty */
+// src/hooks/useSocket.js
+import { useEffect, useRef } from 'react';
+import { io } from 'socket.io-client';
 
-export default function useSocket({ token, onReceiveMessage, onMessageSent, onUserConnected, onUserDisconnected, onTyping }){
-  const ref = useRef(null)
+/**
+ * useSocket({ token, onReceiveMessage, onMessageSent, onUserConnected, onUserDisconnected, onTyping })
+ * returns a ref: { current: socket }
+ */
+export default function useSocket({ token, onReceiveMessage, onMessageSent, onUserConnected, onUserDisconnected, onTyping }) {
+  const ref = useRef(null);
 
   useEffect(() => {
-    if (!token) return
-
+    if (!token) return;
     const socket = io('http://localhost:3000', {
       auth: { token },
-      transports: ['websocket']
-    })
+      transports: ['websocket'],
+      autoConnect: true,
+    });
 
-    socket.on('connect', () => console.log('socket connected', socket.id))
-    socket.on('receive_message', msg => onReceiveMessage?.(msg))
-    socket.on('message_sent', msg => onMessageSent?.(msg))
-    socket.on('user_connected', payload => onUserConnected?.(payload))
-    socket.on('user_disconnected', payload => onUserDisconnected?.(payload))
-    socket.on('typing', payload => onTyping?.(payload))
-    socket.on('connect_error', err => console.error('socket error', err))
+    socket.on('connect', () => console.log('socket connected', socket.id));
+    socket.on('receive_message', (m) => onReceiveMessage?.(m));
+    socket.on('message_sent', (m) => onMessageSent?.(m));
+    socket.on('user_connected', (p) => onUserConnected?.(p));
+    socket.on('user_disconnected', (p) => onUserDisconnected?.(p));
+    socket.on('typing', (p) => onTyping?.(p));
+    socket.on('connect_error', (err) => console.error('socket error', err));
 
-    ref.current = socket
+    ref.current = socket;
     return () => {
-      socket.disconnect()
-      ref.current = null
-    }
-  }, [token, onReceiveMessage, onMessageSent, onUserConnected, onUserDisconnected, onTyping])
+      try { socket.disconnect(); } catch {}
+      ref.current = null;
+    };
+  }, [token, onReceiveMessage, onMessageSent, onUserConnected, onUserDisconnected, onTyping]);
 
-  return ref
+  return ref;
 }

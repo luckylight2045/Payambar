@@ -12,6 +12,7 @@ export const CurrentUser = createParamDecorator<
   unknown
 >((_data, ctx: ExecutionContext): HydratedDocument<User> => {
   const request = ctx.switchToHttp().getRequest<AuthRequest>();
+  console.log('life');
   if (!request.user) {
     throw new UnauthorizedException('user not found in request');
   }

@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { AuthService } from 'src/auth/auth.service';
@@ -50,6 +51,12 @@ export class UserController {
     );
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Get('search')
+  async searchUsers(@Query('q') q: string) {
+    return this.userService.searchByPrefix(q);
+  }
+
   @ApiBearerAuth('access-token')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
@@ -80,5 +87,11 @@ export class UserController {
   @Delete('delete/:id')
   async deleteUser(@Param('id') id: string) {
     return await this.userService.deleteUser(id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id')
+  async getUserById(@Param('id') userId: string) {
+    return this.userService.getUserById(userId);
   }
 }

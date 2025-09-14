@@ -19,7 +19,7 @@ export class UserService {
     const salt = await bcrypt.genSalt(1043);
     const hash = await bcrypt.hash(body.password, salt);
 
-    if (await this.getUserByUserName(body.userName)) {
+    if (await this.getUserByUserName(body.name)) {
       throw new BadRequestException('userName is already taken');
     }
 
@@ -34,8 +34,8 @@ export class UserService {
     return obj;
   }
 
-  async getUserByUserName(userName: string) {
-    return await this.user.findOne({ userName }).exec();
+  async getUserByUserName(name: string) {
+    return await this.user.findOne({ name }).exec();
   }
 
   async getAllUsers() {
@@ -64,9 +64,9 @@ export class UserService {
 
   async updateUser(user: User, body: UserUpdateDto) {
     if (
-      body.userName &&
-      body.userName != user.name &&
-      (await this.getUserByUserName(body.userName))
+      body.name &&
+      body.name != user.name &&
+      (await this.getUserByUserName(body.name))
     ) {
       throw new BadRequestException('userName is already taken');
     }
@@ -95,7 +95,7 @@ export class UserService {
 
     const userDoc = await this.user
       .findOneAndUpdate(
-        { userName: user.name },
+        { name: user.name },
         { ...body, password: body.password ? hash : user.password },
         {
           new: true,
@@ -125,5 +125,23 @@ export class UserService {
     }
 
     await this.user.deleteOne({ _id: objectId });
+  }
+
+  async searchByPrefix(term: string, limit = 50) {
+    if (!term || term.trim().length === 0) {
+      return [];
+    }
+
+    const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const q = escapeRegex(term.trim());
+    const regex = new RegExp('^' + q, 'i');
+
+    return await this.user
+      .find({ $or: [{ name: regex }, { userName: regex }] })
+      .select('_id name userName')
+      .limit(limit)
+      .lean()
+      .exec();
   }
 }

@@ -30,7 +30,13 @@ export class AuthService {
       throw new BadRequestException('password is wrong');
     }
 
-    return this.jwtSign(username, user._id.toString());
+    const { access_token, refresh_token } = await this.jwtSign(
+      username,
+      user._id.toString(),
+    );
+
+    const safeUser = { id: user._id.toString(), username: user.name };
+    return { access_token, refresh_token, user: safeUser };
   }
 
   async jwtSign(username: string, userId: string) {
@@ -70,7 +76,7 @@ export class AuthService {
     return user;
   }
 
-  async refreshToken(refreshToken: string) {
+  async accessToken(refreshToken: string) {
     if (!refreshToken) {
       throw new BadRequestException('refresh token is required');
     }
@@ -98,11 +104,42 @@ export class AuthService {
       },
     );
 
+    return { access_token: newAccessToken };
+  }
+
+  async refreshToken(refreshToken: string) {
+    if (!refreshToken) {
+      throw new BadRequestException('refresh token is required');
+    }
+
+    const payload = await this.jwtService.verifyAsync<JwtPayload>(
+      refreshToken,
+      {
+        secret: this.config.get<string>('REFRESH_TOKEN_SECRET_KEY'),
+      },
+    );
+
+    const user = await this.userService.getUserByUserName(payload.userName);
+
+    if (!user || user.refreshToken !== refreshToken) {
+      throw new UnauthorizedException('unauthorized user');
+    }
+
     const newRefreshToken = await this.jwtService.signAsync(
       { userName: user.name },
       {
         expiresIn: this.config.get<string>('REFRESH_TOKEN_EXPIRE_TIME') || '7d',
         secret: this.config.get<string>('REFRESH_SECRET_KEY'),
+      },
+    );
+
+    const newAccessToken = await this.jwtService.signAsync(
+      {
+        userName: user.name,
+      },
+      {
+        expiresIn: this.config.get<string>('ACCESS_TOKEN_EXPIRE_TIME'),
+        secret: this.config.get<string>('ACCESS_TOKEN_SECRET_KEY'),
       },
     );
 
