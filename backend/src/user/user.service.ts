@@ -138,8 +138,8 @@ export class UserService {
     const regex = new RegExp('^' + q, 'i');
 
     return await this.user
-      .find({ $or: [{ name: regex }, { userName: regex }] })
-      .select('_id name userName')
+      .find({ $or: [{ name: regex }] })
+      .select('_id name')
       .limit(limit)
       .lean()
       .exec();

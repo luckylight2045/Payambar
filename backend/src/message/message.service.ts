@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Message, MessageType } from './schema/message.schema';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { CreateMessageDto } from 'src/chat/dtos/create-message.dto';
 
 @Injectable()
@@ -52,5 +52,16 @@ export class MessageService {
 
     const messages = await query.limit(options.limit).exec();
     return messages;
+  }
+
+  async countForConversation(conversationId: string): Promise<number> {
+    if (!conversationId) return 0;
+    return this.message
+      .countDocuments({
+        conversationId: Types.ObjectId.isValid(conversationId)
+          ? new Types.ObjectId(conversationId)
+          : conversationId,
+      })
+      .exec();
   }
 }

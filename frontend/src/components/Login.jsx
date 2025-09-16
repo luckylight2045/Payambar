@@ -24,40 +24,61 @@ export default function Login() {
 
     setLoading(true);
     try {
-      const res = await axios.post('http://localhost:3000/users/login', { userName: username.trim(), password });
-      const data = res?.data ?? {};
+      const res = await axios.post(
+        'http://localhost:3000/users/login',
+        { userName: username.trim(), password },
+        // { withCredentials: true } // enable if backend uses cookies
+      );
 
+      console.log('login response', res.data);
+
+      // Normalize server response (many shapes exist)
+      const data = res?.data ?? {};
       const access_token = data.access_token ?? data.accessToken ?? data.token ?? null;
       const refresh_token = data.refresh_token ?? data.refreshToken ?? null;
       const userObj = data.user ?? data.userData ?? (data.username ? data : null) ?? data;
 
       if (!access_token || !userObj) {
+        console.error('Unexpected login response', data);
         setError('Login failed: invalid server response');
         setLoading(false);
         return;
       }
 
+      // Normalize user object to contain id & username
       const normalizedUser = {
-        id: userObj.id ?? userObj._id ?? null,
-        username: userObj.username ?? userObj.userName ?? userObj.name ?? null,
+        id: String(userObj.id ?? userObj._id ?? userObj.userId ?? userObj._id?.toString?.() ?? ''),
+        username: userObj.username ?? userObj.userName ?? userObj.name ?? userObj.login ?? '',
         __raw: userObj,
       };
 
-      // last fallback adjustments
-      if (!normalizedUser.id) normalizedUser.id = userObj._id ?? userObj.id ?? null;
-      if (!normalizedUser.username) normalizedUser.username = userObj.name ?? userObj.userName ?? userObj.username ?? null;
+      // If something still missing, log and bail
+      if (!normalizedUser.id || !normalizedUser.username) {
+        console.warn('Normalized user incomplete:', normalizedUser, 'server userObj:', userObj);
+        // still proceed if at least one field exists (some flows used username-only)
+        if (!normalizedUser.id && !normalizedUser.username) {
+          setError('Login failed: server returned incomplete user data');
+          setLoading(false);
+          return;
+        }
+      }
 
       const ok = login(normalizedUser, access_token, refresh_token);
       if (!ok) {
-        setError('Login failed (client)');
+        setError('Login failed (could not store credentials)');
         setLoading(false);
         return;
       }
 
+      // success -> navigate to chat
       navigate('/chat', { replace: true });
     } catch (err) {
-      console.error('Login error', err.response?.data ?? err.message ?? err);
-      const msg = err.response?.data?.message ?? err.response?.data ?? err.message ?? 'Login failed';
+      console.error('Login error', err?.response?.data ?? err?.message ?? err);
+      const msg =
+        err?.response?.data?.message ??
+        err?.response?.data ??
+        err?.message ??
+        'Login failed';
       setError(String(msg));
     } finally {
       setLoading(false);
@@ -136,17 +157,8 @@ const styles = {
     color: '#e6eef6',
     border: '1px solid rgba(255,255,255,0.04)',
   },
-  title: {
-    margin: 0,
-    marginBottom: 14,
-    fontSize: 22,
-    color: '#e6eef6',
-  },
-  form: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 10,
-  },
+  title: { margin: 0, marginBottom: 14, fontSize: 22, color: '#e6eef6' },
+  form: { display: 'flex', flexDirection: 'column', gap: 10 },
   input: {
     padding: '10px 12px',
     borderRadius: 8,
@@ -175,15 +187,8 @@ const styles = {
     cursor: 'pointer',
     fontWeight: 500,
   },
-  footerText: {
-    marginTop: 14,
-    fontSize: 13,
-    color: '#9aa8b8',
-  },
-  link: {
-    color: '#7fb1ff',
-    textDecoration: 'underline',
-  },
+  footerText: { marginTop: 14, fontSize: 13, color: '#9aa8b8' },
+  link: { color: '#7fb1ff', textDecoration: 'underline' },
   error: {
     color: '#ffb4b4',
     fontSize: 13,
