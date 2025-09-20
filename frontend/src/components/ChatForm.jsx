@@ -1,8 +1,9 @@
+// src/components/ChatForm.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import useAuth from '../hooks/useAuth';
 
-export default function ChatForm({ onConversationStart, conversations = [], setConversations }) {
+export default function ChatForm({ onConversationStart, conversations = [] }) {
   const { token } = useAuth();
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
@@ -52,46 +53,49 @@ export default function ChatForm({ onConversationStart, conversations = [], setC
     }
   };
 
+  // helper to normalize participant id (handles string or object)
+  const participantId = (p) => {
+    if (!p) return null;
+    if (typeof p === 'string') return String(p);
+    if (typeof p === 'object') {
+      // mongoose populated doc or similar
+      if (p._id) return String(p._id);
+      if (p.id) return String(p.id);
+      // fallback if _id is an object with toString
+      if (p._id && typeof p._id.toString === 'function') return p._id.toString();
+      return null;
+    }
+    return null;
+  };
+
   // Start or reuse private conversation without sending a message
-  const startConversationWith = async (userId) => {
+  const startConversationWith = async (userId, userName) => {
     setLoading(true);
     setError(null);
     try {
       // Check if it's already in our conversations (by participants)
       const exists = conversations.find((c) => {
         const parts = c.participants || [];
-        return parts.some((p) => String(p) === String(userId));
+        return parts.some((p) => {
+          const pid = participantId(p);
+          return pid && String(pid) === String(userId);
+        });
       });
+
       if (exists) {
-        onConversationStart(exists._id);
-        setQ('');
-        setResults([]);
-        return;
+        // normalize conv id
+        const convId = exists._id ?? exists.id ?? (exists._id && exists._id.toString && exists._id.toString()) ?? null;
+        if (convId) {
+          onConversationStart(String(convId));
+          setQ('');
+          setResults([]);
+          return;
+        }
       }
 
-      // Create or get private conversation via new controller endpoint
-      const res = await axios.post(`http://localhost:3000/conversations/private/${encodeURIComponent(userId)}`, null, {
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      });
-
-      const conv = res?.data;
-      const convId = conv?._id ?? conv?.id ?? conv?.conversationId;
-      if (!convId) throw new Error('No conversation id returned');
-
-      // Add to list (keep participants and name if available)
-      setConversations((prev) => {
-        const copy = prev.filter((p) => p._id !== convId);
-        const convItem = {
-          _id: convId,
-          participants: conv.participants || [userId],
-          name: conv.name || null,
-          lastMessage: conv.lastMessage || null,
-          updatedAt: conv.updatedAt || new Date().toISOString(),
-        };
-        return [convItem, ...copy];
-      });
-
-      onConversationStart(convId);
+      // Otherwise: do NOT create backend conversation yet.
+      // Inform parent to open a draft conversation (frontend-only).
+      onConversationStart({ draft: true, userId, userName });
       setQ('');
       setResults([]);
     } catch (err) {
