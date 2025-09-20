@@ -63,7 +63,6 @@ export default function MessageList({
 
       return () => clearTimeout(timeout);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages]);
 
   // On first mount, consider existing messages as seen (no animation)
