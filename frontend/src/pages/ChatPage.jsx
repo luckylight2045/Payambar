@@ -8,12 +8,9 @@ import MessageInput from '../components/MessageInput';
 import axios from 'axios';
 
 /**
- * ChatPage
- *
- * - Clicking a conversation selects/highlights it but DOES NOT reorder the list.
- * - Conversations are reordered ONLY when the local user sends a message (onMessageSent).
- * - Incoming messages update lastMessage in place but do NOT change ordering.
- * - Messages in the chat pane are grouped by day (MessageList handles grouping).
+ * ChatPage - full file
+ * - MessageInput is shown only when a conversation (or draft conversation) is selected.
+ * - All other behavior (conversations list, drafts, socket handlers) unchanged.
  */
 
 export default function ChatPage() {
@@ -45,10 +42,13 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 .conversations-list { margin-top:6px; overflow-y:auto; padding-right:6px; flex:1; }
 .conv-item { display:flex; gap:12px; align-items:center; padding:10px; border-radius:10px; cursor:pointer; transition: background .12s ease, transform .06s ease; color:var(--text); }
 .conv-item:hover { background: rgba(255,255,255,0.02); transform: translateY(-1px); }
+.conv-item.selected { background: rgba(255,255,255,0.03); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02); }
 .conv-avatar{ width:44px; height:44px; border-radius:50%; background:linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.08)); display:flex; align-items:center; justify-content:center; color:var(--text); font-weight:700; font-size:14px; flex-shrink:0; }
-.conv-meta { display:flex; flex-direction:column; gap:4px; min-width:0; }
-.conv-username { font-weight:700; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:200px; }
-.conv-last { font-size:13px; color:var(--muted-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:200px; }
+.conv-meta { display:flex; flex-direction:column; gap:4px; min-width:0; flex:1; overflow:hidden; }
+.conv-top { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+.conv-username { font-weight:700; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:165px; }
+.conv-last { font-size:13px; color:var(--muted-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:220px; }
+.conv-time { font-size:12px; color:var(--muted); white-space:nowrap; margin-left:6px; }
 .chat-main { flex:1; display:flex; flex-direction:column; background: var(--bg-2); overflow:hidden; }
 .messages-wrap { padding:18px; overflow-y:auto; display:flex; flex-direction:column; gap:12px; height:100%; }
 .message-row { display:flex; flex-direction:column; max-width:100%; }
@@ -121,8 +121,30 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     return 'Unknown';
   };
 
-  // ---------------- SOCKET CALLBACKS ----------------
-  // Receive message: update lastMessage in-place (NO reordering)
+  const removeDrafts = (keepDraftId = null) => {
+    setConversations(prev => prev.filter(c => {
+      const id = String(c._id ?? c.id ?? '');
+      if (!id.startsWith('draft:')) return true;
+      if (keepDraftId && id === keepDraftId) return true;
+      return false;
+    }));
+  };
+
+  const refreshConversationsFromServer = async () => {
+    if (!token) return;
+    try {
+      const res = await axios.get('http://localhost:3000/chats/conversations', { headers: { Authorization: `Bearer ${token}` } });
+      const convs = Array.isArray(res.data) ? res.data : [];
+      setConversations(convs);
+      fillParticipantNames(convs);
+      return convs;
+    } catch (err) {
+      console.error('Failed to refresh conversations from server', err);
+      return null;
+    }
+  };
+
+  // SOCKET callbacks
   const onReceiveMessage = useCallback((message) => {
     if (!message || !message.conversationId) return;
     const convId = String(message.conversationId);
@@ -138,12 +160,17 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         copy[idx] = { ...copy[idx], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() };
         return copy;
       }
-      // unknown conversation -> append to end
       return [...prev, { _id: convId, participants: message.participants ?? [], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }];
     });
-  }, [conversationId]);
 
-  // Message sent by local user: reorder conversation to top
+    (async () => {
+      const exists = conversations.find(c => String(c._id) === convId);
+      if (!exists) {
+        await refreshConversationsFromServer();
+      }
+    })();
+  }, [conversationId, conversations]);
+
   const onMessageSent = useCallback((message) => {
     if (!message || !message.conversationId) return;
     const convId = String(message.conversationId);
@@ -152,6 +179,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       setMessages(prev => [...prev, message]);
     }
 
+    // reorder to top because we sent a message
     setConversations(prev => {
       const copy = prev.slice();
       const idx = copy.findIndex(c => String(c._id) === convId);
@@ -163,18 +191,23 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       return [{ _id: convId, participants: message.participants ?? [], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...copy];
     });
 
-    // If user was on a draft that corresponds to this message, switch UI to real conversation and highlight it
     if (selectedConvId && String(selectedConvId).startsWith('draft:')) {
       const draftUserId = String(selectedConvId).replace(/^draft:/, '');
-      if (message.participants && message.participants.some(p => String(p) === draftUserId)) {
-        setSelectedConvId(convId);
-        setConversationId(convId);
-        setDraftConversation(null);
+      const participants = message.participants ?? [];
+      const matchesDraft = participants.some(p => String(p) === draftUserId) || message.conversationId;
+      if (matchesDraft) {
+        (async () => {
+          await refreshConversationsFromServer();
+          removeDrafts();
+          setSelectedConvId(convId);
+          setConversationId(convId);
+          setDraftConversation(null);
+        })();
+        return;
       }
-    } else {
-      // Select the conversation we just sent to (UX: keep it selected)
-      setSelectedConvId(convId);
     }
+
+    setSelectedConvId(convId);
   }, [conversationId, selectedConvId]);
 
   const socketRef = useSocket({
@@ -183,7 +216,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     onMessageSent,
   });
 
-  // ---------------- Load messages ----------------
+  // Load messages
   const loadMessages = async (convId) => {
     if (!convId) return;
     try {
@@ -191,19 +224,15 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         headers: { Authorization: `Bearer ${token}` },
         params: { limit: 50 },
       });
-      // server gives newest-first; convert to chronological ascending for display
       const msgs = Array.isArray(res.data) ? res.data.slice().reverse() : [];
       setMessages(msgs);
       setConversationId(convId);
       setDraftConversation(null);
       setSelectedConvId(convId);
+      removeDrafts();
 
       const socket = socketRef.current;
       if (socket && socket.connected) socket.emit('join_conversation', { conversationId: convId });
-
-      // pre-resolve participant names for this conversation
-      const found = conversations.find(c => String(c._id) === String(convId));
-      if (found) fillParticipantNames([found]);
 
       setTimeout(() => {
         const el = document.getElementById('messages-wrap');
@@ -215,29 +244,24 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     }
   };
 
-  // ---------------- Send message ----------------
+  // Send message
   const sendMessage = async (content) => {
     if (!content || !content.trim()) return;
     const socket = socketRef.current;
 
-    // Persisted conversation -> socket.emit (this will trigger onMessageSent)
     if (conversationId) {
       if (!socket || !socket.connected) { alert('Socket not connected'); return; }
       socket.emit('send_message', { conversationId, content, messageType: 'text' });
       return;
     }
 
-    // Draft conversation -> create via socket or REST (socket preferred)
     if (draftConversation) {
       const otherId = draftConversation.userId;
-
       if (socket && socket.connected) {
         socket.emit('send_message', { participantIds: [otherId], content, messageType: 'text' });
-        // onMessageSent will handle reordering & selection
         return;
       }
 
-      // fallback REST create/send
       try {
         const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}`, {
           content,
@@ -247,17 +271,15 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         const saved = res.data;
         const convId = saved.conversationId ?? saved.conversation?._id ?? saved._id ?? null;
         if (convId) {
-          // since local user sent, move new conv to top
-          setConversations(prev => {
-            const filtered = prev.filter(c => String(c._id) !== `draft:${otherId}` && String(c._id) !== String(convId));
-            return [{ _id: convId, participants: saved.participants ?? [otherId], lastMessage: saved, updatedAt: saved.createdAt ?? new Date().toISOString() }, ...filtered];
-          });
+          await refreshConversationsFromServer();
+          removeDrafts();
+          setSelectedConvId(convId);
           await loadMessages(convId);
         } else {
           setMessages(prev => [...prev, saved]);
         }
         setDraftConversation(null);
-        setSelectedConvId(convId ?? null);
+        return;
       } catch (err) {
         console.error('Failed to send initial message', err);
         alert('Failed to send message');
@@ -268,10 +290,10 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     alert('No conversation selected');
   };
 
-  // ---------------- Open conversation (click) ----------------
-  // Clicking selects/highlights & opens messages but DOES NOT reorder conversation list.
+  // Open conversation / start
   const handleConversationStart = (payload) => {
     if (typeof payload === 'string') {
+      removeDrafts();
       setSelectedConvId(String(payload));
       loadMessages(payload);
       return;
@@ -281,39 +303,51 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       const otherUserId = payload.userId;
       const otherUserName = payload.userName;
 
-      // if persisted conv exists, open that instead
-      const existing = conversations.find(c => {
+      const existing = conversations.find((c) => {
         const parts = c.participants || [];
-        return parts.some(p => String(participantId(p)) === String(otherUserId));
+        return parts.some((p) => {
+          const pid = participantId(p);
+          return pid && String(pid) === String(otherUserId);
+        });
       });
 
       if (existing) {
-        setSelectedConvId(String(existing._id ?? existing.id));
-        loadMessages(String(existing._id ?? existing.id));
+        removeDrafts();
+        setSelectedConvId(existing._id ?? existing.id ?? String(existing._id));
+        loadMessages(existing._id ?? existing.id ?? String(existing._id));
         return;
       }
 
-      // open frontend-only draft and append to end (do not reorder)
       setConversationId('');
       setMessages([]);
       setDraftConversation({ userId: otherUserId, userName: otherUserName });
+
       const draftId = `draft:${otherUserId}`;
+
       setConversations(prev => {
-        if (prev.some(c => String(c._id) === draftId)) return prev;
-        return [...prev, { _id: draftId, participants: [otherUserId], name: otherUserName, lastMessage: null, updatedAt: new Date().toISOString() }];
+        const filtered = prev.filter(c => !String(c._id).startsWith('draft:'));
+        if (prev.some(c => String(c._id) === draftId)) {
+          const existingDraft = prev.find(c => String(c._id) === draftId);
+          return [...filtered, existingDraft];
+        }
+        return [...filtered, { _id: draftId, participants: [otherUserId], name: otherUserName, lastMessage: null, updatedAt: new Date().toISOString() }];
       });
+
       setSelectedConvId(draftId);
       return;
     }
 
     if (payload && payload._id) {
-      setSelectedConvId(String(payload._id));
-      loadMessages(String(payload._id));
+      removeDrafts();
+      const convId = payload._id;
+      setDraftConversation(null);
+      setSelectedConvId(convId);
+      loadMessages(convId);
       return;
     }
   };
 
-  // ---------------- Load known conversations at mount ----------------
+  // initial fetch
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
@@ -322,7 +356,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         const res = await axios.get('http://localhost:3000/chats/conversations', { headers: { Authorization: `Bearer ${token}` } });
         const convs = Array.isArray(res.data) ? res.data : [];
         if (!cancelled) {
-          // server should already sort by updatedAt desc; we respect server order
           setConversations(convs);
           fillParticipantNames(convs);
         }
@@ -334,7 +367,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     return () => { cancelled = true; };
   }, [token]);
 
-  // ---------------- Resolve participant names ----------------
+  // resolve participant names for fallback
   const fillParticipantNames = async (convs) => {
     if (!Array.isArray(convs) || convs.length === 0) return;
     const idsToFetch = new Set();
@@ -364,6 +397,59 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     });
   };
 
+  // helpers for preview/time
+  const formatConversationTime = (isoOrDate) => {
+    if (!isoOrDate) return '';
+    const d = new Date(isoOrDate);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const yesterday = new Date();
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday = d.toDateString() === yesterday.toDateString();
+
+    if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (isYesterday) return 'Yesterday';
+    return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+  };
+
+  const previewForLastMessage = (c) => {
+    const m = c.lastMessage ?? null;
+    if (m && (typeof m === 'object') && ('content' in m)) {
+      const content = (m.content ?? '').replace(/\s+/g, ' ').trim();
+      const senderIsMe = (() => {
+        const sid = m.senderId ? (typeof m.senderId === 'object' ? (m.senderId._id ?? m.senderId.id) : m.senderId) : null;
+        return sid && String(sid) === String(currentUserId);
+      })();
+      const senderName = (() => {
+        if (!m.senderId) return null;
+        if (typeof m.senderId === 'object') return m.senderId.name ?? m.senderId.userName ?? null;
+        return participantNameMap[String(m.senderId)] ?? null;
+      })();
+      const prefix = senderIsMe ? 'You: ' : (senderName ? `${senderName}: ` : '');
+      const max = 48;
+      if (content.length <= max) return prefix + content;
+      return prefix + content.slice(0, max).trim() + '…';
+    }
+
+    if (c.lastMessageContent) {
+      const senderIsMe = c.lastMessageSender && String(c.lastMessageSender) === String(currentUserId);
+      const prefix = senderIsMe ? 'You: ' : (c.lastMessageSenderName ? `${c.lastMessageSenderName}: ` : '');
+      const text = (c.lastMessageContent ?? '').replace(/\s+/g, ' ').trim();
+      const max = 48;
+      if (text.length <= max) return prefix + text;
+      return prefix + text.slice(0, max).trim() + '…';
+    }
+
+    return '';
+  };
+
+  const lastMessageTimeForConv = (c) => {
+    const m = c.lastMessage ?? null;
+    if (m && typeof m === 'object' && m.createdAt) return m.createdAt;
+    if (c.lastMessageCreatedAt) return c.lastMessageCreatedAt;
+    return c.updatedAt ?? null;
+  };
+
   return (
     <div className="app-container">
       <style id="chat-page-inline-styles" dangerouslySetInnerHTML={{ __html: css }} />
@@ -384,10 +470,13 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
               const otherName = (c.name && String(c.name).trim().length > 0) ? c.name : getOtherNameForConversation(c);
               const isSelected = selectedConvId && String(convId) === String(selectedConvId);
 
+              const lastMsgPreview = previewForLastMessage(c);
+              const lastTime = lastMessageTimeForConv(c);
+
               return (
                 <li
                   key={convId}
-                  className="conv-item"
+                  className={`conv-item ${isSelected ? 'selected' : ''}`}
                   onClick={() => {
                     if (isDraft) {
                       const userId = String(convId).replace(/^draft:/, '');
@@ -398,13 +487,17 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
                   }}
                   style={{
                     cursor: 'pointer',
-                    background: isSelected ? 'rgba(255,255,255,0.02)' : undefined,
                   }}
                 >
                   <div className="conv-avatar">{(otherName || 'U').slice(0,2).toUpperCase()}</div>
                   <div className="conv-meta">
-                    <div className="conv-username">{otherName || 'Unknown'}</div>
-                    <div className="conv-last">{c.lastMessage ? (c.lastMessage.content ?? '') : ''}</div>
+                    <div className="conv-top">
+                      <div className="conv-username" title={otherName || 'Unknown'}>{otherName || 'Unknown'}</div>
+                      <div className="conv-time">{formatConversationTime(lastTime)}</div>
+                    </div>
+                    <div className="conv-last" title={c.lastMessage?.content ?? c.lastMessageContent ?? ''}>
+                      {lastMsgPreview}
+                    </div>
                   </div>
                 </li>
               );
@@ -439,11 +532,14 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
           )}
         </div>
 
-        <div className="chat-footer">
-          <div style={{ flex: 1 }}>
-            <MessageInput sendMessage={sendMessage} />
+        {/* Chat footer is shown only when a conversation/draft is selected */}
+        {selectedConvId ? (
+          <div className="chat-footer">
+            <div style={{ flex: 1 }}>
+              <MessageInput sendMessage={sendMessage} />
+            </div>
           </div>
-        </div>
+        ) : null}
       </div>
     </div>
   );

@@ -217,7 +217,6 @@ export default function AuthProvider({ children }) {
       console.warn('refreshAllTokens failed', err?.response?.data ?? err.message);
       return false;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshToken]);
 
   // login: set tokens and user (normalizes shape)
@@ -314,7 +313,6 @@ export default function AuthProvider({ children }) {
         axiosResponseInterceptorRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshAccessToken, token, logout]);
 
   // Clear timeout on unmount

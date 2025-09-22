@@ -14,7 +14,9 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
 
 @Controller('conversations')
 export class ConversationController {
-  constructor(private readonly conversationService: ConversationService) {}
+  constructor(private readonly conversationService: ConversationService) {
+    console.log('controller is instantiatted');
+  }
 
   @UseGuards(JwtAuthGuard)
   @Get('me')

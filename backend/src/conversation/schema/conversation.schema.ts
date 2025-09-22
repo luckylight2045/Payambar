@@ -19,7 +19,7 @@ export class Conversation {
   @Prop({ type: [{ type: Types.ObjectId, ref: 'User' }], required: true })
   participants: Types.ObjectId[];
 
-  @Prop({ type: Types.ObjectId, required: false })
+  @Prop({ type: Types.ObjectId, ref: 'Message', required: false })
   lastMessage?: Types.ObjectId;
 
   @Prop({ default: Date.now, timestamp: true })
