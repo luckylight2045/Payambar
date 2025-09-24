@@ -53,7 +53,6 @@ export class ChatGateway
 
   async handleConnection(client: AuthSocket) {
     const auth = client.handshake?.auth as unknown;
-
     const maybeToken =
       auth && typeof (auth as Record<string, unknown>)['token'] === 'string'
         ? (auth as Record<string, string>)['token']
@@ -74,16 +73,54 @@ export class ChatGateway
       });
 
       const user = await this.userService.getUserByUserName(payload.userName);
-
       if (!user) {
         throw new NotFoundException('user is not found');
       }
 
       const userId = user._id.toString();
-
       client.data.userId = userId;
-      await this.ioredis.sadd(`online:${userId}`, client.id);
-      await this.ioredis.set(`socket:${client.id}`, userId);
+
+      const socketId = client.id;
+      if (!socketId) {
+        this.logger.warn(`Connection has no socket id for user ${userId}`);
+        try {
+          await this.ioredis.sadd('online_users', userId);
+        } catch (err) {
+          this.logger.warn(
+            'Redis add online_users failed',
+            (err as Error).message,
+          );
+        }
+        return;
+      }
+
+      try {
+        await this.ioredis
+          .multi()
+          .sadd(`online:${userId}`, socketId)
+          .sadd('online_users', userId)
+          .set(`socket:${socketId}`, userId)
+          .exec();
+      } catch (err) {
+        this.logger.warn(
+          'Redis multi in handleConnection failed',
+          (err as Error).message,
+        );
+      }
+
+      const remaining = await this.ioredis.scard(`online:${userId}`);
+
+      if (remaining === 1) {
+        this.server.emit('user_connected', { userId });
+        this.logger.log(`User ${userId} is now online`);
+      }
+
+      try {
+        const onlineUserIds = await this.ioredis.smembers('online_users');
+        client.emit('online_list', onlineUserIds);
+      } catch (err) {
+        this.logger.warn('Failed to fetch online_list', (err as Error).message);
+      }
     } catch (err) {
       this.logger.warn(
         `Socket ${client.id} auth failed: ${(err as Error).message}`,
@@ -95,26 +132,66 @@ export class ChatGateway
 
   async handleDisconnect(client: AuthSocket) {
     const socketId = client.id;
-    const userId =
-      client.data.userId ?? (await this.ioredis.get(`socket:${socketId}`));
+    let userId: string | null = null;
+    try {
+      if (client.data && typeof client.data.userId === 'string') {
+        userId = client.data.userId;
+      } else if (socketId) {
+        const maybe = await this.ioredis.get(`socket:${socketId}`);
+        if (typeof maybe === 'string' && maybe.length > 0) userId = maybe;
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Error reading socket->user mapping for socket ${socketId}: ${(err as Error).message}`,
+      );
+    }
 
     if (typeof userId !== 'string') {
       this.logger.debug(
         `Disconnected socket ${socketId} had no associated user`,
       );
+      if (socketId) {
+        try {
+          await this.ioredis.del(`socket:${socketId}`);
+        } catch (e) {
+          console.log(e);
+        }
+      }
       return;
     }
 
-    await this.ioredis.srem(`online:${userId}`, socketId);
-    await this.ioredis.del(`socket:${socketId}`);
+    const multi = this.ioredis.multi();
+    if (socketId) multi.srem(`online:${userId}`, socketId);
+    multi.del(`socket:${socketId}`);
 
-    const remaining = await this.ioredis.scard(`online:${userId}`);
-    if (remaining === 0) {
-      this.server.emit('user_disconnected', { userId });
-      this.logger.log(`User ${userId} is now offline`);
-    } else {
-      this.logger.log(
-        `Socket ${socketId} removed for user ${userId}. ${remaining} sockets remain.`,
+    try {
+      await multi.exec();
+    } catch (err) {
+      this.logger.warn(
+        `Redis multi in handleDisconnect failed: ${(err as Error).message}`,
+      );
+    }
+
+    try {
+      const remaining = await this.ioredis.scard(`online:${userId}`);
+      if (remaining === 0) {
+        try {
+          await this.ioredis.srem('online_users', userId);
+        } catch (err) {
+          this.logger.warn(
+            `Failed to remove ${userId} from online_users: ${(err as Error).message}`,
+          );
+        }
+        this.server.emit('user_disconnected', { userId });
+        this.logger.log(`User ${userId} is now offline`);
+      } else {
+        this.logger.debug(
+          `Socket ${socketId} removed for user ${userId}. ${remaining} sockets remain.`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Failed to compute remaining sockets for ${userId}: ${(err as Error).message}`,
       );
     }
   }

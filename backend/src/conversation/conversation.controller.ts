@@ -11,22 +11,24 @@ import { CurrentUser } from 'src/decorators/current-user.decorator';
 import { HydratedDocument } from 'mongoose';
 import { User } from 'src/user/schema/user.schema';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
+import { ApiBearerAuth } from '@nestjs/swagger';
 
+@ApiBearerAuth('access-token')
+@UseGuards(JwtAuthGuard)
 @Controller('conversations')
 export class ConversationController {
   constructor(private readonly conversationService: ConversationService) {
     console.log('controller is instantiatted');
   }
 
-  @UseGuards(JwtAuthGuard)
   @Get('me')
   async listConversationsForUser(@CurrentUser() user: HydratedDocument<User>) {
+    console.log('conversations/me is called');
     return this.conversationService.listConversationForUser(
       user._id.toString(),
     );
   }
 
-  @UseGuards(JwtAuthGuard)
   @Post('private/:otherUserId')
   async createOrGetPrivate(
     @Param('otherUserId') otherUserId: string,
@@ -42,7 +44,6 @@ export class ConversationController {
     return conv;
   }
 
-  @UseGuards(JwtAuthGuard)
   @Delete(':id')
   async deleteIfEmpty(
     @Param('id') id: string,
