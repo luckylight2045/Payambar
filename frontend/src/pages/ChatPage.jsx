@@ -1,5 +1,5 @@
 // src/pages/ChatPage.jsx
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import useAuth from '../hooks/useAuth';
 import useSocket from '../hooks/useSocket';
 import ChatForm from '../components/ChatForm';
@@ -8,8 +8,12 @@ import MessageInput from '../components/MessageInput';
 import axios from 'axios';
 
 /**
- * ChatPage - preserves your layout and behavior.
- * Shows a small "Connecting..." banner when token present and socket not connected yet.
+ * ChatPage with improved presence UX:
+ *  - uses navigator.onLine to detect local network offline/online
+ *  - when offline: immediately clears onlineUsers locally and shows "Connecting..."
+ *  - when online: attempts to reconnect socket and waits for server 'online_list' to repopulate presence
+ *
+ * No backend changes are required for this to improve the UI responsiveness.
  */
 
 export default function ChatPage() {
@@ -35,10 +39,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 .app-container { height:100vh; display:flex; gap:0; overflow:hidden; }
 .sidebar { width:320px; min-width:260px; background: linear-gradient(180deg, var(--sidebar-bg), #051218); border-right: 1px solid rgba(255,255,255,0.04); padding:18px; box-sizing:border-box; display:flex; flex-direction:column; }
 .sidebar .title { font-size:22px; font-weight:700; margin-bottom:12px; color:var(--text); }
-.chat-form { display:flex; flex-direction:column; gap:10px; margin-bottom:18px; }
-.chat-form select, .chat-form input, .chat-form textarea { background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text); padding:10px 12px; border-radius:8px; outline:none; }
-.chat-form input::placeholder, .chat-form textarea::placeholder { color: var(--placeholder); }
-.chat-form button { background: var(--accent); color: white; padding:8px 12px; border-radius:8px; border: none; cursor:pointer; font-weight:600; box-shadow: 0 6px 18px rgba(43,110,246,0.12); }
 .conversations-list { margin-top:6px; overflow-y:auto; padding-right:6px; flex:1; }
 .conv-item { display:flex; gap:12px; align-items:center; padding:10px; border-radius:10px; cursor:pointer; transition: background .12s ease, transform .06s ease; color:var(--text); }
 .conv-item:hover { background: rgba(255,255,255,0.02); transform: translateY(-1px); }
@@ -53,150 +53,72 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 .chat-main { flex:1; display:flex; flex-direction:column; background: var(--bg-2); overflow:hidden; }
 .connecting-banner { background: rgba(255,255,255,0.03); padding:8px 12px; text-align:center; color: var(--muted); font-size:13px; border-bottom: 1px solid rgba(255,255,255,0.02); }
 .messages-wrap { padding:18px; overflow-y:auto; display:flex; flex-direction:column; gap:12px; height:100%; }
-.message-row { display:flex; flex-direction:column; max-width:100%; }
-.message-row.mine { align-items:flex-end; }
-.message-row.theirs { align-items:flex-start; }
-.message-meta { display:flex; gap:8px; align-items:center; font-size:12px; color:var(--muted); margin-bottom:6px; }
-.msg-bubble { padding:10px 14px; max-width:70%; word-wrap:break-word; line-height:1.35; border-radius:14px; box-shadow: 0 1px 0 rgba(0,0,0,0.2) inset; }
-.msg-bubble.mine { background: var(--bubble-mine); color: white; border-radius: 16px 16px 4px 16px; }
-.msg-bubble.theirs { background: var(--bubble-other); color: var(--text); border: 1px solid var(--bubble-other-border); border-radius: 16px 16px 16px 4px; }
-.chat-footer { border-top: 1px solid rgba(255,255,255,0.03); padding:12px; display:flex; align-items:center; gap:12px; background: linear-gradient(180deg, rgba(255,255,255,0.01), transparent); }
-.message-input { display:flex; align-items:center; gap:8px; width:100%; }
-.message-input input { flex:1; padding:10px 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.04); color:var(--text); border-radius:12px; outline:none; }
-.message-input input::placeholder { color: var(--placeholder); }
-.message-input button { background: var(--accent); color: white; padding:10px 14px; border-radius:8px; border:none; cursor:pointer; }
 .empty-state { height:100%; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:16px; }
-.messages-wrap::-webkit-scrollbar, .conversations-list::-webkit-scrollbar { width:10px; }
-.messages-wrap::-webkit-scrollbar-thumb, .conversations-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius:8px; }
 `;
 
   const { token, user } = useAuth();
-  // destructure new hook return
-  const { socketRef, isConnected, isConnecting, networkOk } = useSocket({
-    token,
-    onReceiveMessage: undefined, // you pass handlers below if you want; ChatPage attaches its own callbacks further down
-    onMessageSent: undefined,
-    onUserConnected: undefined,
-    onUserDisconnected: undefined,
-    onTyping: undefined,
-    onOnlineList: undefined,
-  });
+  const socketRef = useSocket({ token });
 
-  const [conversationId, setConversationId] = useState('');
-  const [messages, setMessages] = useState([]);
   const [conversations, setConversations] = useState([]);
+  const [messages, setMessages] = useState([]);
   const [participantNameMap, setParticipantNameMap] = useState({});
   const [draftConversation, setDraftConversation] = useState(null);
-  const [selectedConvId, setSelectedConvId] = useState(null);
+
+  // presence + typing
   const [onlineUsers, setOnlineUsers] = useState(() => new Set());
+  const [isNetworkOnline, setIsNetworkOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const typingRef = useRef(new Map());
+  const [typingRenderState, setTypingRenderState] = useState({});
+
+  const [activeConvId, setActiveConvId] = useState(null); // selected item (draft:id or real)
+  const [loadedConvId, setLoadedConvId] = useState(null); // persisted conversation loaded
 
   const currentUserId = user?.id ?? user?._id ?? user?.__raw?._id ?? null;
   const currentUserName = user?.username ?? user?.name ?? 'You';
 
-  // helper to update onlineUsers set (unchanged from previous)
-  const addOnline = (id) => setOnlineUsers((prev) => { const copy = new Set(prev); copy.add(String(id)); return copy; });
-  const removeOnline = (id) => setOnlineUsers((prev) => { const copy = new Set(prev); copy.delete(String(id)); return copy; });
-
-  // --- socket handlers (similar to earlier code) ---
-  const onReceiveMessage = useCallback((message) => {
-    if (!message || !message.conversationId) return;
-    if (String(message.conversationId) === String(conversationId)) {
-      setMessages((prev) => [...prev, message]);
-    }
-    setConversations((prev) => {
-      const copy = prev.slice();
-      const idx = copy.findIndex((c) => String(c._id) === String(message.conversationId));
-      if (idx !== -1) {
-        copy[idx] = { ...copy[idx], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() };
-      }
-      return copy;
+  // presence helpers
+  const addOnline = useCallback((id) => {
+    setOnlineUsers((prev) => {
+      const s = new Set(prev);
+      s.add(String(id));
+      return s;
     });
-  }, [conversationId]);
-
-  const onMessageSent = useCallback((message) => {
-    if (!message) return;
-    if (String(message.conversationId) === String(conversationId)) setMessages((prev) => [...prev, message]);
-    setConversations((prev) => {
-      const idx = prev.findIndex((c) => String(c._id) === String(message.conversationId));
-      if (idx !== -1) {
-        const item = { ...prev[idx], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() };
-        const copy = prev.slice();
-        copy.splice(idx, 1);
-        return [item, ...copy];
-      }
-      return [{ _id: message.conversationId, participants: message.participants ?? [], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...prev];
-    });
-    setSelectedConvId(String(message.conversationId));
-  }, [conversationId]);
-
-  const onUserConnected = useCallback((payload) => {
-    const uid = payload && (payload.userId ?? payload);
-    if (!uid) return;
-    addOnline(uid);
   }, []);
-
-  const onUserDisconnected = useCallback((payload) => {
-    const uid = payload && (payload.userId ?? payload);
-    if (!uid) return;
-    removeOnline(uid);
-  }, []);
-
-  const onOnlineList = useCallback((list) => {
-    if (!Array.isArray(list)) return;
-    setOnlineUsers(() => {
-      const s = new Set();
-      (list || []).forEach((i) => s.add(String(i)));
+  const removeOnline = useCallback((id) => {
+    setOnlineUsers((prev) => {
+      const s = new Set(prev);
+      s.delete(String(id));
       return s;
     });
   }, []);
 
-  // Attach handlers to socketRef (we have to attach because hook consumer passed undefined handlers above)
-  useEffect(() => {
-    const s = socketRef?.current;
-    if (!s) return;
-
-    s.on('receive_message', onReceiveMessage);
-    s.on('message_sent', onMessageSent);
-    s.on('user_connected', onUserConnected);
-    s.on('user_disconnected', onUserDisconnected);
-    s.on('online_list', onOnlineList);
-
-    return () => {
-      try {
-        s.off('receive_message', onReceiveMessage);
-        s.off('message_sent', onMessageSent);
-        s.off('user_connected', onUserConnected);
-        s.off('user_disconnected', onUserDisconnected);
-        s.off('online_list', onOnlineList);
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn('socket off error', err && (err.message || err));
+  // typing helpers
+  const TYPING_EXPIRE_MS = 6000;
+  const addTypingUser = useCallback((convId, userId) => {
+    if (!convId || !userId) return;
+    if (String(userId) === String(currentUserId)) return;
+    const convMap = typingRef.current.get(convId) || new Map();
+    const prevTimer = convMap.get(userId);
+    if (prevTimer) clearTimeout(prevTimer);
+    const t = setTimeout(() => {
+      const m = typingRef.current.get(convId);
+      if (m) {
+        m.delete(userId);
+        if (m.size === 0) typingRef.current.delete(convId);
+        else typingRef.current.set(convId, m);
       }
-    };
-  }, [socketRef, onReceiveMessage, onMessageSent, onUserConnected, onUserDisconnected, onOnlineList]);
+      const newRender = {};
+      typingRef.current.forEach((m2, k) => { newRender[k] = Array.from(m2.keys()); });
+      setTypingRenderState(newRender);
+    }, TYPING_EXPIRE_MS);
+    convMap.set(userId, t);
+    typingRef.current.set(convId, convMap);
+    const newRender = {};
+    typingRef.current.forEach((m2, k) => { newRender[k] = Array.from(m2.keys()); });
+    setTypingRenderState(newRender);
+  }, [currentUserId]);
 
-  // load conversations
-  useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-    const fetchConversations = async () => {
-      try {
-        const res = await axios.get('http://localhost:3000/chats/conversations', { headers: { Authorization: `Bearer ${token}` } });
-        const convs = Array.isArray(res.data) ? res.data : [];
-        if (!cancelled) {
-          setConversations(convs);
-          fillParticipantNames(convs);
-        }
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error('Failed to load conversations', err && (err.message || err));
-      }
-    };
-    fetchConversations();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
-
+  // participant id helper
   const participantId = (p) => {
     if (!p) return null;
     if (typeof p === 'string') return String(p);
@@ -206,6 +128,149 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     }
     return null;
   };
+
+  // socket listeners
+  useEffect(() => {
+    const s = socketRef?.current;
+    if (!s) return () => {};
+
+    const onOnlineList = (list) => {
+      if (!Array.isArray(list)) return;
+      setOnlineUsers(new Set(list.map((i) => String(i))));
+    };
+    const onUserConnected = (payload) => {
+      const uid = payload && (payload.userId ?? payload);
+      if (!uid) return;
+      addOnline(uid);
+    };
+    const onUserDisconnected = (payload) => {
+      const uid = payload && (payload.userId ?? payload);
+      if (!uid) return;
+      removeOnline(uid);
+    };
+    const onTyping = (payload) => {
+      if (!payload) return;
+      const convId = payload.conversationId;
+      const userId = payload.userId;
+      if (!convId || !userId) return;
+      if (payload.isTyping) addTypingUser(convId, userId);
+      else {
+        const m = typingRef.current.get(convId);
+        if (m) {
+          const t = m.get(userId);
+          if (t) clearTimeout(t);
+          m.delete(userId);
+          if (m.size === 0) typingRef.current.delete(convId);
+          else typingRef.current.set(convId, m);
+          const newRender = {};
+          typingRef.current.forEach((m2, k) => { newRender[k] = Array.from(m2.keys()); });
+          setTypingRenderState(newRender);
+        }
+      }
+    };
+    const onReceiveMessage = (message) => {
+      if (!message) return;
+      setConversations((prev) => {
+        const copy = prev.slice();
+        const idx = copy.findIndex((c) => String(c._id) === String(message.conversationId));
+        if (idx !== -1) {
+          copy[idx] = { ...copy[idx], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() };
+          return copy;
+        }
+        return [{ _id: message.conversationId, participants: message.participants ?? [], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...copy];
+      });
+      if (String(message.conversationId) === String(loadedConvId)) {
+        setMessages((prev) => [...prev, message]);
+      }
+    };
+    const onMessageSent = (message) => {
+      if (!message) return;
+      setConversations((prev) => {
+        const idx = prev.findIndex((c) => String(c._id) === String(message.conversationId));
+        if (idx !== -1) {
+          const item = { ...prev[idx], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() };
+          const copy = prev.slice();
+          copy.splice(idx, 1);
+          return [item, ...copy];
+        }
+        return [{ _id: message.conversationId, participants: message.participants ?? [], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...prev];
+      });
+      if (String(message.conversationId) === String(loadedConvId)) {
+        setMessages((prev) => [...prev, message]);
+      }
+      setActiveConvId(String(message.conversationId));
+      setLoadedConvId(String(message.conversationId));
+    };
+
+    s.on('online_list', onOnlineList);
+    s.on('user_connected', onUserConnected);
+    s.on('user_disconnected', onUserDisconnected);
+    s.on('typing', onTyping);
+    s.on('receive_message', onReceiveMessage);
+    s.on('message_sent', onMessageSent);
+
+    return () => {
+      try {
+        s.off('online_list', onOnlineList);
+        s.off('user_connected', onUserConnected);
+        s.off('user_disconnected', onUserDisconnected);
+        s.off('typing', onTyping);
+        s.off('receive_message', onReceiveMessage);
+        s.off('message_sent', onMessageSent);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[ChatPage] socket off error', e && (e.message || e));
+      }
+    };
+  }, [socketRef, addOnline, removeOnline, addTypingUser, loadedConvId]);
+
+  // network (navigator.onLine) handling: immediate local UX updates
+  useEffect(() => {
+    const onOffline = () => {
+      setIsNetworkOnline(false);
+      // immediately clear online presence locally while offline (UX: immediate feedback)
+      setOnlineUsers(new Set());
+    };
+    const onOnline = () => {
+      setIsNetworkOnline(true);
+      // Try to reconnect socket (the hook also handles this but we call explicitly to be safe)
+      try {
+        socketRef?.current?.connect?.();
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[ChatPage] connect attempt failed', e && e.message);
+      }
+      // when socket reconnects the server should emit `online_list`
+    };
+
+    window.addEventListener('offline', onOffline);
+    window.addEventListener('online', onOnline);
+    return () => {
+      window.removeEventListener('offline', onOffline);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [socketRef]);
+
+  // load conversations initially
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await axios.get('http://localhost:3000/chats/conversations', { headers: { Authorization: `Bearer ${token}` } });
+        const convs = Array.isArray(res.data) ? res.data : [];
+        if (!cancelled) {
+          setConversations(convs);
+          fillParticipantNames(convs);
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[ChatPage] Failed to load conversations', err && (err.message || err));
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   const fillParticipantNames = async (convs) => {
     if (!Array.isArray(convs) || convs.length === 0) return;
@@ -228,13 +293,13 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     setParticipantNameMap((prev) => {
       const copy = { ...prev };
       for (const r of results) {
-        if (r.name) copy[r.id] = r.name;
-        else copy[r.id] = r.id.slice(0, 6);
+        copy[r.id] = r.name || r.id.slice(0, 6);
       }
       return copy;
     });
   };
 
+  // load messages for a conversation
   const loadMessages = async (convId) => {
     if (!convId) return;
     try {
@@ -244,10 +309,10 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       });
       const msgs = Array.isArray(res.data) ? res.data.slice().reverse() : [];
       setMessages(msgs);
-      setConversationId(convId);
+      setLoadedConvId(convId);
 
-      const socket = socketRef.current;
-      if (socket && socket.connected) socket.emit('join_conversation', { conversationId: convId });
+      const s = socketRef.current;
+      if (s && s.connected) s.emit('join_conversation', { conversationId: convId });
 
       setTimeout(() => {
         const el = document.getElementById('messages-wrap');
@@ -255,55 +320,57 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       }, 50);
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.error('Failed to load messages', e && (e.message || e));
+      console.error('[ChatPage] Failed to load messages', e && (e.message || e));
       alert('Failed to load messages');
     }
   };
 
-  // sendMessage logic preserved (omitted here for brevity, re-use your implementation)
-  const sendMessage = (content) => {
-    const socket = socketRef.current;
+  // sending message (socket preferred)
+  const sendMessage = async (content) => {
     if (!content || !content.trim()) return;
-    if (conversationId) {
-      if (!socket || !socket.connected) { alert('Socket not connected'); return; }
-      socket.emit('send_message', { conversationId, content, messageType: 'text' });
+    const s = socketRef.current;
+    if (loadedConvId) {
+      if (!s || !s.connected) { alert('Socket not connected'); return; }
+      s.emit('send_message', { conversationId: loadedConvId, content, messageType: 'text' });
       return;
     }
-    if (draftConversation) {
+
+    // draft conversation handling
+    if (activeConvId && String(activeConvId).startsWith('draft:') && draftConversation) {
       const otherId = draftConversation.userId;
-      if (socket && socket.connected) {
-        socket.emit('send_message', { participantIds: [otherId], content, messageType: 'text' });
+      if (!otherId) return;
+      if (s && s.connected) {
+        s.emit('send_message', { participantIds: [otherId], content, messageType: 'text' });
         setDraftConversation(null);
         return;
       }
-      (async () => {
-        try {
-          const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}`, {
-            content, messageType: 'text',
-          }, { headers: { Authorization: `Bearer ${token}` } });
-          const saved = res.data;
-          const convId = saved.conversationId ?? saved.conversation?._id ?? saved._id ?? null;
-          if (convId) {
-            await refreshConversationsFromServer();
-            setDraftConversation(null);
-            await loadMessages(convId);
-          } else {
-            setMessages((prev) => [...prev, saved]);
-          }
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.error('Failed to send initial message', err && (err.message || err));
-          alert('Failed to send message');
+      try {
+        const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}`, {
+          content, messageType: 'text',
+        }, { headers: { Authorization: `Bearer ${token}` } });
+        const saved = res.data;
+        const convId = saved.conversationId ?? saved.conversation?._id ?? saved._id ?? null;
+        if (convId) {
+          await refreshConversationsFromServer();
+          setDraftConversation(null);
+          setActiveConvId(convId);
+          await loadMessages(convId);
+        } else {
+          setMessages((prev) => [...prev, saved]);
         }
-      })();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[ChatPage] Failed to send initial message', err && (err.message || err));
+        alert('Failed to send message');
+      }
       return;
     }
+
     alert('No conversation selected');
   };
 
-  // refreshConversationsFromServer helper
   const refreshConversationsFromServer = async () => {
-    if (!token) return;
+    if (!token) return null;
     try {
       const res = await axios.get('http://localhost:3000/chats/conversations', { headers: { Authorization: `Bearer ${token}` } });
       const convs = Array.isArray(res.data) ? res.data : [];
@@ -312,44 +379,42 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       return convs;
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.error('Failed to refresh conversations', err && (err.message || err));
+      console.error('[ChatPage] Failed to refresh conversations', err && (err.message || err));
       return null;
     }
   };
 
+  // handle starting/selecting conversation
   const handleConversationStart = (payload) => {
+    if (!payload) return;
     if (typeof payload === 'string') {
-      setSelectedConvId(payload);
+      setActiveConvId(payload);
+      setDraftConversation(null);
       loadMessages(payload);
       return;
     }
-
     if (payload && payload.draft) {
       const otherUserId = payload.userId;
       const otherUserName = payload.userName;
+      // check if we already have persisted conversation with that user
       const existing = conversations.find((c) => {
         const parts = c.participants || [];
-        return parts.some((p) => {
-          const pid = participantId(p);
-          return pid && String(pid) === String(otherUserId);
-        });
+        return parts.some((p) => participantId(p) && String(participantId(p)) === String(otherUserId));
       });
       if (existing) {
         const existingId = existing._id ?? existing.id ?? existing;
-        setSelectedConvId(existingId);
+        setActiveConvId(existingId);
+        setDraftConversation(null);
         loadMessages(existingId);
         return;
       }
-
-      setConversationId('');
+      const draftId = `draft:${otherUserId}`;
+      setActiveConvId(draftId);
+      setLoadedConvId(null);
       setMessages([]);
       setDraftConversation({ userId: otherUserId, userName: otherUserName });
-      const draftId = `draft:${otherUserId}`;
-
       setConversations((prev) => {
-        if (prev.some((c) => String(c._id) === draftId)) {
-          return prev;
-        }
+        if (prev.some((c) => String(c._id) === draftId)) return prev;
         return [...prev, {
           _id: draftId,
           participants: [
@@ -361,19 +426,16 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
           updatedAt: new Date().toISOString(),
         }];
       });
-
-      setSelectedConvId(draftId);
       return;
     }
-
     if (payload && payload._id) {
+      setActiveConvId(payload._id);
       setDraftConversation(null);
-      setSelectedConvId(payload._id);
       loadMessages(payload._id);
     }
   };
 
-  // preview and helper functions for listing (same as earlier)
+  // display helpers
   const getOtherNameForConversation = (c) => {
     if (!c) return 'Unknown';
     if (c.name) return c.name;
@@ -444,7 +506,15 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     return false;
   };
 
-  // ---- UI render ----
+  // typing display for current conv
+  const convForTyping = loadedConvId || activeConvId || '';
+  const typingUsersForCurrent = (typingRenderState[convForTyping] || []).filter((id) => String(id) !== String(currentUserId));
+  const typingNames = typingUsersForCurrent.map((id) => participantNameMap[id] ?? id.slice(0, 6));
+
+  // show connecting banner when local network offline OR socket not connected
+  const socketConnected = !!(socketRef && socketRef.current && socketRef.current.connected);
+  const showConnecting = !isNetworkOnline || !socketConnected;
+
   return (
     <div className="app-container">
       <style id="chat-page-inline-styles" dangerouslySetInnerHTML={{ __html: css }} />
@@ -465,7 +535,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
               const convId = c._id ?? c.id;
               const isDraft = String(convId).startsWith('draft:');
               const otherName = (c.name && String(c.name).trim().length > 0) ? c.name : getOtherNameForConversation(c);
-              const isSelected = selectedConvId && String(convId) === String(selectedConvId);
+              const isSelected = activeConvId && String(convId) === String(activeConvId);
               const lastMsgPreview = previewForLastMessage(c);
               const lastTime = lastMessageTimeForConv(c);
               const otherOnline = isOtherParticipantOnline(c);
@@ -506,30 +576,25 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       </div>
 
       <div className="chat-main">
-        {/* Connecting banner: show when we have a token, we're not connected, and we are attempting or network is not ok */}
-        {token && !isConnected && (
-          <div className="connecting-banner">
-            {isConnecting ? 'Connecting…' : (!networkOk ? 'Offline — reconnecting when network returns' : 'Connecting…')}
-          </div>
-        )}
+        {showConnecting ? <div className="connecting-banner">Connecting…</div> : null}
 
         <div className="messages-wrap" id="messages-wrap">
-          {conversationId ? (
+          {loadedConvId ? (
             <MessageList
               messages={messages}
               currentUserId={currentUserId}
               participantNameMap={participantNameMap}
               currentUserName={currentUserName}
             />
-          ) : draftConversation ? (
+          ) : activeConvId && String(activeConvId).startsWith('draft:') ? (
             <>
               <div style={{ padding: 12, color: 'var(--muted)' }}>
-                Chat with <strong>{draftConversation.userName || draftConversation.userId}</strong>
+                Chat with <strong>{draftConversation?.userName ?? draftConversation?.userId}</strong>
               </div>
               <MessageList
                 messages={messages}
                 currentUserId={currentUserId}
-                participantNameMap={{ ...participantNameMap, [draftConversation.userId]: draftConversation.userName }}
+                participantNameMap={{ ...participantNameMap, [draftConversation?.userId]: draftConversation?.userName }}
                 currentUserName={currentUserName}
               />
             </>
@@ -538,11 +603,15 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
           )}
         </div>
 
-        {selectedConvId ? (
-          <div className="chat-footer">
-            <div style={{ flex: 1 }}>
-              <MessageInput sendMessage={sendMessage} />
-            </div>
+        {typingNames.length > 0 && (
+          <div style={{ padding: 8, color: 'var(--muted)' }}>
+            {typingNames.join(', ')} {typingNames.length === 1 ? 'is' : 'are'} typing…
+          </div>
+        )}
+
+        {activeConvId ? (
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.03)', padding: 12 }}>
+            <MessageInput sendMessage={sendMessage} conversationId={loadedConvId || (draftConversation ? `draft:${draftConversation.userId}` : '')} socketRef={socketRef} />
           </div>
         ) : null}
       </div>

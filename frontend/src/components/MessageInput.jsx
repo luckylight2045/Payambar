@@ -1,106 +1,153 @@
+/* eslint-disable no-empty */
 // src/components/MessageInput.jsx
-import React, { useState, useRef, useEffect } from 'react';
-import PropTypes from 'prop-types';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 
 /**
  * MessageInput
- * - sendMessage(content) prop required
- * - Press Enter to send (Shift+Enter inserts newline)
+ * Props:
+ *  - sendMessage(content) => void | Promise
+ *  - placeholder (string)
+ *  - conversationId (string) - current conversation id or draft id
+ *  - socketRef (ref) - socketRef.current is socket.io instance
  */
-export default function MessageInput({ sendMessage, placeholder = 'Write a message…' }) {
+export default function MessageInput({
+  sendMessage,
+  placeholder = 'Write a message…',
+  conversationId,
+  socketRef,
+}) {
   const [value, setValue] = useState('');
-  const [sending, setSending] = useState(false);
-  const textareaRef = useRef(null);
+  const typingRef = useRef(false);
+  const idleTimer = useRef(null);
+  const IDLE_TIMEOUT_MS = 1500;
 
-  // attempt to keep textarea height small and expandable
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = el.scrollHeight + 2 + 'px';
-  }, [value]);
-
-  const doSend = async () => {
-    const text = value?.toString?.().trim?.();
-    if (!text) return;
+  const safeEmitTyping = useCallback((isTyping) => {
     try {
-      setSending(true);
-      // allow parent to handle how they want to send (socket or REST)
-      await Promise.resolve(sendMessage(text));
-      setValue('');
-      // reset height
-      const el = textareaRef.current;
-      if (el) {
-        el.style.height = 'auto';
-      }
+      if (!socketRef || !socketRef.current) return;
+      // conversationId might be a draft id (e.g. 'draft:...') — server expects conversationId present for room events;
+      // for typing we still send the conversationId so others in that room (if joined) know.
+      socketRef.current.emit('typing', { conversationId, isTyping: !!isTyping });
     } catch (err) {
-      // parent handles errors usually; still ensure sending flag cleared
-      console.error('sendMessage failed', err);
-      // you may want to show an inline error here
-    } finally {
-      setSending(false);
+      // don't crash on emit errors
+      // eslint-disable-next-line no-console
+      console.warn('typing emit failed', err && (err.message || err));
     }
+  }, [socketRef, conversationId]);
+
+  // called whenever user types
+  const handleChange = (e) => {
+    const v = e.target.value;
+    setValue(v);
+
+    // announce typing if not already announced
+    if (!typingRef.current) {
+      typingRef.current = true;
+      safeEmitTyping(true);
+    }
+    // restart idle timer
+    if (idleTimer.current) clearTimeout(idleTimer.current);
+    idleTimer.current = setTimeout(() => {
+      typingRef.current = false;
+      safeEmitTyping(false);
+      idleTimer.current = null;
+    }, IDLE_TIMEOUT_MS);
   };
 
-  const onKeyDown = (e) => {
+  // clear typing state and timers, emit false if needed
+  const clearTyping = useCallback(() => {
+    if (idleTimer.current) {
+      clearTimeout(idleTimer.current);
+      idleTimer.current = null;
+    }
+    if (typingRef.current) {
+      typingRef.current = false;
+      safeEmitTyping(false);
+    }
+  }, [safeEmitTyping]);
+
+  // send message on Enter (not Shift+Enter)
+  const handleKeyDown = async (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      // ignore empty
-      if (!value || !value.trim()) return;
-      doSend();
+      const content = value.trim();
+      if (!content) {
+        setValue('');
+        clearTyping();
+        return;
+      }
+      setValue('');
+      clearTyping();
+      try {
+        await sendMessage(content);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('sendMessage failed', err && (err.message || err));
+      }
     }
   };
 
+  // emit false on blur / unmount
+  useEffect(() => {
+    const onBlur = () => clearTyping();
+    try {
+      window.addEventListener('blur', onBlur);
+    } catch {}
+    return () => {
+      clearTyping();
+      try {
+        window.removeEventListener('blur', onBlur);
+      } catch {}
+    };
+  }, [clearTyping]);
+
+  useEffect(() => {
+    return () => {
+      if (idleTimer.current) clearTimeout(idleTimer.current);
+    };
+  }, []);
+
   return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-      <textarea
-        ref={textareaRef}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <input
         value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={onKeyDown}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
         placeholder={placeholder}
-        rows={1}
         style={{
           flex: 1,
-          resize: 'none',
           padding: '10px 12px',
           borderRadius: 12,
           border: '1px solid rgba(255,255,255,0.04)',
-          background: 'rgba(255,255,255,0.03)',
+          background: 'rgba(255,255,255,0.02)',
           color: 'inherit',
           outline: 'none',
-          fontSize: 14,
-          lineHeight: 1.4,
-          maxHeight: 200,
-          overflow: 'auto',
         }}
-        disabled={sending}
       />
       <button
-        onClick={() => {
-          if (!value || !value.trim()) return;
-          doSend();
+        type="button"
+        onClick={async () => {
+          const content = value.trim();
+          if (!content) return;
+          setValue('');
+          clearTyping();
+          try {
+            await sendMessage(content);
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.error('sendMessage failed', err && (err.message || err));
+          }
         }}
-        disabled={sending}
         style={{
           background: 'linear-gradient(180deg,#2b6ef6,#1e4fd8)',
-          color: 'white',
+          color: '#fff',
           padding: '10px 14px',
           borderRadius: 8,
           border: 'none',
-          cursor: sending ? 'default' : 'pointer',
-          fontWeight: 600,
-          minWidth: 84,
+          cursor: 'pointer',
         }}
-        aria-label="Send message"
       >
-        {sending ? 'Sending…' : 'Send'}
+        Send
       </button>
     </div>
   );
 }
-
-MessageInput.propTypes = {
-  sendMessage: PropTypes.func.isRequired,
-  placeholder: PropTypes.string,
-};
