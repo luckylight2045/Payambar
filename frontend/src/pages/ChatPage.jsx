@@ -1,3 +1,4 @@
+/* eslint-disable no-empty */
 /* eslint-disable no-unused-vars */
 // src/pages/ChatPage.jsx
 import React, { useState, useCallback, useEffect, useRef } from 'react';
@@ -20,17 +21,10 @@ import {
 } from '../utils/chatUtils';
 
 /**
- * Refactored ChatPage:
- * - Keeps all original UI/UX and logic.
- * - Extracted helpers to utils and REST logic to useConversations.
- * - Added right-click context menu that calls backend endpoints:
- *    - DELETE /messages/history/:id (clear history)
- *    - DELETE /conversations/:id (delete conversation)
+ * ChatPage (full)
  *
- * Behavior preserved:
- * - Draft lifecycle (click to create draft, remove draft on send or when selecting persisted conv)
- * - Socket events and presence/typing behavior are unchanged
- * - Message fetching and sending remain identical (socket-first, REST fallback)
+ * NOTE: This file was extended with `handleEditMessage` and MessageList is now passed
+ * both `onDeleteMessage` and `onEditMessage`.
  */
 
 export default function ChatPage() {
@@ -76,33 +70,28 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
   const { token, user } = useAuth();
   const socketRef = useSocket({ token });
 
-  // useConversations provides conversations + helpers
   const { conversations, setConversations, refresh, deleteConversation, clearHistory } = useConversations(token);
 
-  // page state (messages / drafts / presence / typing)
   const [messages, setMessages] = useState([]);
   const [participantNameMap, setParticipantNameMap] = useState({});
   const [draftConversation, setDraftConversation] = useState(null);
 
-  // presence + typing
   const [onlineUsers, setOnlineUsers] = useState(() => new Set());
   const [isNetworkOnline, setIsNetworkOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const typingRef = useRef(new Map());
   const [typingRenderState, setTypingRenderState] = useState({});
 
-  const [activeConvId, setActiveConvId] = useState(null); // selected item (draft:id or real)
-  const [loadedConvId, setLoadedConvId] = useState(null); // persisted conversation loaded
+  const [activeConvId, setActiveConvId] = useState(null);
+  const [loadedConvId, setLoadedConvId] = useState(null);
 
   const currentUserId = user?.id ?? user?._id ?? user?.__raw?._id ?? null;
   const currentUserName = user?.username ?? user?.name ?? 'You';
 
-  // context menu state
   const [ctxVisible, setCtxVisible] = useState(false);
   const [ctxX, setCtxX] = useState(0);
   const [ctxY, setCtxY] = useState(0);
   const [ctxTargetConv, setCtxTargetConv] = useState(null);
 
-  // presence helpers
   const addOnline = useCallback((id) => {
     setOnlineUsers((prev) => {
       const s = new Set(prev);
@@ -118,7 +107,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     });
   }, []);
 
-  // typing helpers (same behavior)
   const TYPING_EXPIRE_MS = 6000;
   const addTypingUser = useCallback((convId, userId) => {
     if (!convId || !userId) return;
@@ -144,7 +132,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     setTypingRenderState(newRender);
   }, [currentUserId]);
 
-  // socket listeners (preserve original behavior)
+  // socket listeners (unchanged)
   useEffect(() => {
     const s = socketRef?.current;
     if (!s) return () => {};
@@ -187,7 +175,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     const onReceiveMessage = (message) => {
       if (!message) return;
 
-      // update conversations list (same logic as before)
       setConversations((prev) => {
         const copy = (prev || []).slice();
         const idx = copy.findIndex((c) => String(c._id) === String(message.conversationId));
@@ -198,7 +185,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         return [{ _id: message.conversationId, participants: message.participants ?? [], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...copy];
       });
 
-      // remove any transient draft that matched the conversation participants (if present)
       try {
         const parts = message.participants ?? [];
         for (const p of parts) {
@@ -206,9 +192,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
           if (!pid) continue;
           setConversations((prev) => removeDraftForUser(prev, pid));
         }
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) {}
 
       if (String(message.conversationId) === String(loadedConvId)) {
         setMessages((prev) => [...prev, message]);
@@ -217,7 +201,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 
     const onMessageSent = (message) => {
       if (!message) return;
-      // update conversations (move to top)
       setConversations((prev) => {
         const idx = (prev || []).findIndex((c) => String(c._id) === String(message.conversationId));
         if (idx !== -1) {
@@ -229,7 +212,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         return [{ _id: message.conversationId, participants: message.participants ?? [], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...(prev || [])];
       });
 
-      // if the message came from creating a conversation for a draft user, remove that draft
       try {
         const parts = message.participants ?? [];
         for (const p of parts) {
@@ -237,9 +219,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
           if (!pid) continue;
           setConversations((prev) => removeDraftForUser(prev, pid));
         }
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) {}
 
       if (String(message.conversationId) === String(loadedConvId)) {
         setMessages((prev) => [...prev, message]);
@@ -269,7 +249,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     };
   }, [socketRef, addOnline, removeOnline, addTypingUser, loadedConvId, setConversations]);
 
-  // navigator.onLine handling (preserve behavior)
   useEffect(() => {
     const onOffline = () => {
       setIsNetworkOnline(false);
@@ -277,11 +256,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     };
     const onOnline = () => {
       setIsNetworkOnline(true);
-      try {
-        socketRef?.current?.connect?.();
-      } catch (e) {
-        console.warn('[ChatPage] connect attempt failed', e && e.message);
-      }
+      try { socketRef?.current?.connect?.(); } catch (e) { console.warn('[ChatPage] connect attempt failed', e && e.message); }
     };
 
     window.addEventListener('offline', onOffline);
@@ -292,7 +267,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     };
   }, [socketRef]);
 
-  // load participant names helper (same as before)
   const fillParticipantNames = async (convs) => {
     if (!Array.isArray(convs) || convs.length === 0) return;
     const idsToFetch = new Set();
@@ -320,13 +294,21 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     });
   };
 
-  // reload participant names whenever conversations change
   useEffect(() => {
     fillParticipantNames(conversations);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversations]);
 
-  // load messages for a conversation (preserve behavior)
+  // helper to robustly extract last message id (avoids mixing || and ??)
+  const getLastMessageId = (c) => {
+    if (!c) return null;
+    const lm = c.lastMessage ?? c.lastMessageContent ?? null;
+    if (!lm) return null;
+    if (typeof lm === 'string') return lm;
+    if (typeof lm === 'object') return lm._id ?? lm.id ?? null;
+    return null;
+  };
+
   const loadMessages = async (convId) => {
     if (!convId) return;
     try {
@@ -351,7 +333,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     }
   };
 
-  // send message (socket-first, REST fallback) — preserves earlier behavior
   const sendMessage = async (content) => {
     if (!content || !content.trim()) return;
     const s = socketRef.current;
@@ -361,14 +342,11 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       return;
     }
 
-    // draft conversation handling
     if (activeConvId && String(activeConvId).startsWith('draft:') && draftConversation) {
       const otherId = draftConversation.userId;
       if (!otherId) return;
       if (s && s.connected) {
-        // emit send for draft conversation
         s.emit('send_message', { participantIds: [otherId], content, messageType: 'text' });
-        // clear frontend draft state and remove the draft from conversations list
         setDraftConversation(null);
         setConversations((prev) => removeDraftForUser(prev, otherId));
         return;
@@ -403,13 +381,9 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     return convs;
   };
 
-  // handle starting/selecting conversation (preserve previous logic but clean drafts)
   const handleConversationStart = (payload) => {
     if (!payload) return;
-
-    // plain conversation id string
     if (typeof payload === 'string') {
-      // remove frontend drafts when selecting persisted conversation
       setConversations((prev) => removeAllDraftsFromList(prev));
       setActiveConvId(payload);
       setDraftConversation(null);
@@ -417,18 +391,15 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       return;
     }
 
-    // draft selection
     if (payload && payload.draft) {
       const otherUserId = payload.userId;
       const otherUserName = payload.userName;
-      // check if persisted conversation already exists
       const existing = (conversations || []).find((c) => {
         const parts = c.participants || [];
         return parts.some((p) => utilParticipantId(p) && String(utilParticipantId(p)) === String(otherUserId));
       });
       if (existing) {
         const existingId = existing._id ?? existing.id ?? existing;
-        // remove drafts and load the existing persisted conv
         setConversations((prev) => removeAllDraftsFromList(prev));
         setActiveConvId(existingId);
         setDraftConversation(null);
@@ -457,16 +428,14 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       return;
     }
 
-    // full persisted conversation object
     if (payload && payload._id) {
       setConversations((prev) => removeAllDraftsFromList(prev));
       setActiveConvId(payload._id);
       setDraftConversation(null);
-      loadMessages(payload._id);
+      loadMessages(payload._1d ?? payload._id ?? payload.id ?? payload);
     }
   };
 
-  // display helpers that use utils (keeps same UI)
   const getOtherNameForConversation = (c) => {
     if (!c) return 'Unknown';
     if (c.name) return c.name;
@@ -499,16 +468,14 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     return false;
   };
 
-  // typing display for current conv
   const convForTyping = loadedConvId || activeConvId || '';
   const typingUsersForCurrent = (typingRenderState[convForTyping] || []).filter((id) => String(id) !== String(currentUserId));
   const typingNames = typingUsersForCurrent.map((id) => participantNameMap[id] ?? id.slice(0, 6));
 
-  // show connecting banner
   const socketConnected = !!(socketRef && socketRef.current && socketRef.current.connected);
   const showConnecting = !isNetworkOnline || !socketConnected;
 
-  // Context menu handlers
+  // Context menu handlers for conversation list (unchanged)
   const openContextMenu = (e, conv) => {
     e.preventDefault();
     setCtxTargetConv(conv);
@@ -526,15 +493,12 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     const conv = ctxTargetConv;
     if (!conv) return;
     const convId = conv._id ?? conv.id ?? '';
-    // drafts have no history on server; just clear local messages
     if (String(convId).startsWith('draft:')) {
       setMessages([]);
       return;
     }
-    // call backend endpoint
     const result = await clearHistory(convId);
     if (result.ok) {
-      // if cleared successfully, remove lastMessage locally and messages if loaded
       setConversations((prev) => (prev || []).map((c) => {
         if (String(c._id ?? c.id ?? '') === String(convId)) {
           return { ...c, lastMessage: null };
@@ -552,8 +516,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
   const handleDeleteConversation = async () => {
     const conv = ctxTargetConv;
     if (!conv) return;
-    const convId = conv._id ?? conv.id ?? '';
-    // if draft, remove locally
+    const convId = conv._1d ?? conv._id ?? conv.id ?? '';
     if (String(convId).startsWith('draft:')) {
       const otherUserId = String(convId).replace(/^draft:/, '');
       setConversations((prev) => removeDraftForUser(prev, otherUserId));
@@ -566,10 +529,8 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       closeContextMenu();
       return;
     }
-    // call backend delete
     const res = await deleteConversation(convId);
     if (res.ok) {
-      // remove from list and clear UI if needed
       setConversations((prev) => (prev || []).filter((c) => String(c._id ?? c.id ?? '') !== String(convId)));
       if (String(activeConvId) === String(convId)) {
         setActiveConvId(null);
@@ -581,7 +542,97 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     }
   };
 
-  // render
+  // delete a single message (called by MessageList)
+  const handleDeleteMessage = async (messageId, messageObj) => {
+    if (!messageId) return;
+    if (!loadedConvId) {
+      setMessages((prev) => (prev || []).filter((m) => String(m._id ?? m.id ?? '') !== String(messageId)));
+      return;
+    }
+
+    try {
+      const res = await axios.delete(
+        `http://localhost:3000/messages/${encodeURIComponent(messageId)}/${encodeURIComponent(loadedConvId)}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      const deletedCount = res?.data?.deletedCount ?? (res?.data ? 1 : 0);
+
+      if (deletedCount > 0) {
+        setMessages((prev) => (prev || []).filter((m) => String(m._id ?? m.id ?? '') !== String(messageId)));
+
+        setConversations((prev) => (prev || []).map((c) => {
+          if (String(c._id ?? c.id ?? '') === String(loadedConvId)) {
+            const lm = c.lastMessage ?? c.lastMessageContent ?? null;
+            const lastMsgId = (typeof lm === 'object' && lm) ? (lm._id ?? lm.id ?? null) : (typeof lm === 'string' ? lm : null);
+            if (String(lastMsgId) === String(messageId)) {
+              return { ...c, lastMessage: null };
+            }
+          }
+          return c;
+        }));
+      } else {
+        alert('No message removed');
+      }
+    } catch (err) {
+      console.error('[ChatPage] delete message failed', err?.response?.data ?? err?.message ?? err);
+      alert('Failed to delete message');
+    }
+  };
+
+  // EDIT message (called by MessageList)
+  const handleEditMessage = async (messageId, newContent) => {
+    if (!messageId) return { ok: false, error: 'no id' };
+    if (!newContent || String(newContent).trim().length === 0) {
+      return { ok: false, error: 'content required' };
+    }
+    if (!loadedConvId) {
+      // local edit for draft
+      setMessages((prev) => (prev || []).map((m) => {
+        if (String(m._id ?? m.id ?? '') === String(messageId)) {
+          return { ...m, content: newContent, edited: true, updatedAt: new Date().toISOString() };
+        }
+        return m;
+      }));
+      return { ok: true };
+    }
+
+    try {
+      const res = await axios.patch(
+        `http://localhost:3000/messages/${encodeURIComponent(messageId)}`,
+        { content: newContent },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      // assume success if status 2xx
+      // Update local messages
+      setMessages((prev) => (prev || []).map((m) => {
+        if (String(m._id ?? m.id ?? '') === String(messageId)) {
+          return { ...m, content: newContent, edited: true, updatedAt: new Date().toISOString() };
+        }
+        return m;
+      }));
+
+      // If edited message is the conversation lastMessage, update it there too
+      setConversations((prev) => (prev || []).map((c) => {
+        if (String(c._id ?? c.id ?? '') === String(loadedConvId)) {
+          const lm = c.lastMessage ?? null;
+          const lmId = lm ? (lm._id ?? lm.id ?? null) : null;
+          if (String(lmId) === String(messageId)) {
+            const newLast = { ...(lm || {}), content: newContent, updatedAt: new Date().toISOString() };
+            return { ...c, lastMessage: newLast };
+          }
+        }
+        return c;
+      }));
+
+      return { ok: true };
+    } catch (err) {
+      console.error('[ChatPage] edit message failed', err?.response?.data ?? err?.message ?? err);
+      return { ok: false, error: err?.response?.data ?? err?.message };
+    }
+  };
+
   return (
     <div className="app-container">
       <style id="chat-page-inline-styles" dangerouslySetInnerHTML={{ __html: css }} />
@@ -653,6 +704,8 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
               currentUserId={currentUserId}
               participantNameMap={participantNameMap}
               currentUserName={currentUserName}
+              onDeleteMessage={handleDeleteMessage}
+              onEditMessage={handleEditMessage}
             />
           ) : activeConvId && String(activeConvId).startsWith('draft:') ? (
             <>
@@ -664,6 +717,8 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
                 currentUserId={currentUserId}
                 participantNameMap={{ ...participantNameMap, [draftConversation?.userId]: draftConversation?.userName }}
                 currentUserName={currentUserName}
+                onDeleteMessage={handleDeleteMessage}
+                onEditMessage={handleEditMessage}
               />
             </>
           ) : (

@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 // src/components/MessageList.jsx
 import React, { useEffect, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
@@ -7,21 +8,39 @@ import PropTypes from 'prop-types';
  * - groups messages by day
  * - shows time as HH:MM
  * - animates newly arrived messages with a small slide/fade animation
+ * - supports right-click context menu per-message with "Edit" and "Delete"
  *
  * Props:
  *  - messages: array of message objects (expected chronological ascending)
  *  - currentUserId: string
  *  - participantNameMap: { userId -> displayName }
  *  - currentUserName: optional
+ *  - onDeleteMessage(messageId, messageObj) => Promise (provided by parent)
+ *  - onEditMessage(messageId, newContent) => Promise<{ok:true}|{ok:false,error}>
  */
 export default function MessageList({
   messages = [],
   currentUserId,
   participantNameMap = {},
+  currentUserName,
+  onDeleteMessage,
+  onEditMessage,
 }) {
-  // For animation: remember which message keys we've already seen
   const seenKeysRef = useRef(new Set());
   const [newKeys, setNewKeys] = useState(new Set());
+
+  // context menu state for messages
+  const [ctxVisible, setCtxVisible] = useState(false);
+  const [ctxX, setCtxX] = useState(0);
+  const [ctxY, setCtxY] = useState(0);
+  const [ctxTargetMessage, setCtxTargetMessage] = useState(null);
+
+  // confirm delete popup state
+  const [confirmVisible, setConfirmVisible] = useState(false);
+
+  // editing state
+  const [editingId, setEditingId] = useState(null);
+  const [editValue, setEditValue] = useState('');
 
   // compute deterministic key for a message
   const messageKey = (m, idx) => {
@@ -29,7 +48,6 @@ export default function MessageList({
     return m._id ?? m.id ?? (m.createdAt ? `${m.createdAt}-${idx}` : `idx-${idx}`);
   };
 
-  // When messages change, detect newly added keys and mark them for animation
   useEffect(() => {
     const keys = [];
     for (let i = 0; i < messages.length; i++) {
@@ -45,36 +63,30 @@ export default function MessageList({
     }
 
     if (newly.length > 0) {
-      // mark all newly seen messages as "new"
       setNewKeys((prev) => {
         const copy = new Set(prev);
         for (const k of newly) copy.add(k);
         return copy;
       });
 
-      // remove the "new" mark after animation duration
       const timeout = setTimeout(() => {
         setNewKeys((prev) => {
           const copy = new Set(prev);
           for (const k of newly) copy.delete(k);
           return copy;
         });
-      }, 600); // animation length + small buffer
+      }, 600);
 
       return () => clearTimeout(timeout);
     }
   }, [messages]);
 
-  // On first mount, consider existing messages as seen (no animation)
   useEffect(() => {
     if (messages.length === 0) return;
     const initKeys = messages.map((m, i) => messageKey(m, i));
     for (const k of initKeys) seenKeysRef.current.add(k);
-    // no state change required
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // resolve sender name
   const resolveSenderName = (sender) => {
     if (!sender) return 'Unknown';
     if (typeof sender === 'object') {
@@ -102,7 +114,7 @@ export default function MessageList({
     return currentUserId && String(currentUserId) === String(sender);
   };
 
-  // Group messages by day (Date.toDateString)
+  // Group messages by day
   const groups = {};
   for (const m of messages) {
     const d = m.createdAt ? new Date(m.createdAt) : new Date();
@@ -110,8 +122,6 @@ export default function MessageList({
     if (!groups[dayKey]) groups[dayKey] = [];
     groups[dayKey].push(m);
   }
-
-  // Sort day keys ascending (oldest first)
   const dayKeys = Object.keys(groups).sort((a, b) => new Date(a) - new Date(b));
 
   const formatDayLabel = (dayKey) => {
@@ -135,20 +145,160 @@ export default function MessageList({
     }
   };
 
-  // Inline CSS for the animation and minor styling
+  // Context menu helpers
+  const openMessageContextMenu = (e, message) => {
+    e.preventDefault();
+    setCtxTargetMessage(message);
+    setCtxX(e.clientX);
+    setCtxY(e.clientY);
+    setConfirmVisible(false);
+    setCtxVisible(true);
+  };
+
+  const closeMessageContextMenu = () => {
+    setCtxVisible(false);
+    setCtxTargetMessage(null);
+    setConfirmVisible(false);
+  };
+
+  // Delete flow
+  const onRequestDelete = () => {
+    // show confirmation UI (two-step)
+    setConfirmVisible(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!ctxTargetMessage) {
+      closeMessageContextMenu();
+      return;
+    }
+    const id = ctxTargetMessage._id ?? ctxTargetMessage.id;
+    try {
+      if (onDeleteMessage) {
+        await onDeleteMessage(id, ctxTargetMessage);
+      }
+    } catch (e) {
+      // parent will alert on error
+    } finally {
+      closeMessageContextMenu();
+    }
+  };
+
+  // Edit flow
+  const onRequestEdit = () => {
+    if (!ctxTargetMessage) return;
+    // only allow editing your own messages
+    const mine = isMessageMine(ctxTargetMessage.senderId);
+    if (!mine) {
+      closeMessageContextMenu();
+      return;
+    }
+    setEditingId(ctxTargetMessage._id ?? ctxTargetMessage.id);
+    setEditValue(ctxTargetMessage.content ?? '');
+    closeMessageContextMenu();
+    // focus will be handled in edit input via autoFocus
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditValue('');
+  };
+
+  const saveEdit = async () => {
+    if (!editingId) return;
+    const newContent = String(editValue || '').trim();
+    if (!newContent) {
+      // Do nothing empty
+      return;
+    }
+    if (onEditMessage) {
+      const res = await onEditMessage(editingId, newContent);
+      if (res && res.ok) {
+        // parent updates state — we just clear editing UI
+        setEditingId(null);
+        setEditValue('');
+      } else {
+        alert('Failed to edit message' + (res && res.error ? `: ${res.error}` : ''));
+      }
+    } else {
+      // fallback (shouldn't happen if parent passed handler)
+      setMessagesLocalEdit(editingId, newContent);
+      setEditingId(null);
+      setEditValue('');
+    }
+  };
+
+  // local fallback edit (not used normally)
+  const setMessagesLocalEdit = (messageId, content) => {
+    // Only if you had local setter; not available in this component — noop
+    console.warn('local edit happened but parent did not provide onEditMessage');
+  };
+
+  // keyboard handler for edit (Enter to save, Shift+Enter newline, Esc cancel)
+  const handleEditKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelEdit();
+      return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      saveEdit();
+    }
+  };
+
+  // small inline styles for the menu
+  const menuStyle = {
+    position: 'fixed',
+    left: ctxX,
+    top: ctxY,
+    background: '#0b1420',
+    border: '1px solid rgba(255,255,255,0.06)',
+    boxShadow: '0 8px 24px rgba(2,6,23,0.6)',
+    padding: 8,
+    borderRadius: 8,
+    zIndex: 9999,
+    minWidth: 160,
+    color: 'var(--text, #e6eef6)',
+  };
+  const menuItemStyle = { padding: '8px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 14 };
+
+  // confirm popup style (positioned near same coords)
+  const confirmStyle = {
+    position: 'fixed',
+    left: ctxX,
+    top: ctxY + 44,
+    background: '#111827',
+    padding: 10,
+    borderRadius: 8,
+    zIndex: 10000,
+    color: '#e6eef6',
+    boxShadow: '0 6px 20px rgba(0,0,0,0.6)',
+  };
+
+  // Inline CSS for animation
   const styles = (
     <style>
       {`
-      .msg-new {
-        animation: msg-in 360ms cubic-bezier(.22,1,.36,1);
-      }
+      .msg-new { animation: msg-in 360ms cubic-bezier(.22,1,.36,1); }
       @keyframes msg-in {
         0% { transform: translateY(8px) scale(.995); opacity: 0; filter: blur(2px); }
         60% { transform: translateY(-2px) scale(1.002); opacity: 1; filter: blur(0); }
         100% { transform: translateY(0) scale(1); opacity: 1; filter: none; }
       }
-      /* Slight pop for sender name and time */
       .message-meta-compact { display:flex; gap:8px; align-items:center; }
+      .msg-edit-input {
+        width:100%;
+        box-sizing:border-box;
+        padding:8px 10px;
+        border-radius:8px;
+        border:1px solid rgba(255,255,255,0.06);
+        background: rgba(255,255,255,0.02);
+        color: inherit;
+        font-size:14px;
+        resize: vertical;
+        min-height:36px;
+      }
       `}
     </style>
   );
@@ -164,16 +314,7 @@ export default function MessageList({
       {dayKeys.map((dayKey) => (
         <div key={dayKey} style={{ marginBottom: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'center', margin: '10px 0' }}>
-            <div
-              style={{
-                background: 'rgba(255,255,255,0.03)',
-                padding: '6px 10px',
-                borderRadius: 12,
-                fontSize: 12,
-                color: '#9aa8b8',
-                fontWeight: 600,
-              }}
-            >
+            <div style={{ background: 'rgba(255,255,255,0.03)', padding: '6px 10px', borderRadius: 12, fontSize: 12, color: '#9aa8b8', fontWeight: 600 }}>
               {formatDayLabel(dayKey)}
             </div>
           </div>
@@ -184,17 +325,41 @@ export default function MessageList({
             const mine = isMessageMine(m.senderId);
             const senderName = resolveSenderName(m.senderId);
             const isNew = newKeys.has(key);
+            const messageId = m._id ?? m.id ?? key;
+
+            // If this message is being edited, render the edit input
+            if (String(editingId) === String(messageId)) {
+              return (
+                <div key={key} style={{ marginBottom: 8, display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
+                  <div style={{ fontSize: 12, color: '#9aa8b8', marginBottom: 4, display: 'flex', gap: 8, alignItems: 'center' }} className="message-meta-compact">
+                    <strong style={{ marginRight: 8 }}>{mine ? 'You' : senderName}</strong>
+                    <span style={{ color: '#6b7280', fontSize: 11 }}>{m.createdAt ? formatTime(m.createdAt) : ''}</span>
+                  </div>
+
+                  <div style={{ maxWidth: '70%' }}>
+                    <textarea
+                      autoFocus
+                      className="msg-edit-input"
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onKeyDown={handleEditKeyDown}
+                      placeholder="Edit message… (Enter to save, Shift+Enter for newline)"
+                    />
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8, justifyContent: mine ? 'flex-end' : 'flex-start' }}>
+                      <button onClick={cancelEdit} style={{ background: 'transparent', color: '#9aa8b8', padding: '6px 10px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.04)' }}>Cancel</button>
+                      <button onClick={saveEdit} style={{ background: 'linear-gradient(180deg,#2b6ef6,#1e4fd8)', color: '#fff', padding: '6px 10px', borderRadius: 6, border: 'none' }}>Save</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
 
             return (
               <div
                 key={key}
                 className={`message ${mine ? 'mine' : 'theirs'} ${isNew ? 'msg-new' : ''}`}
-                style={{
-                  marginBottom: 8,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: mine ? 'flex-end' : 'flex-start',
-                }}
+                style={{ marginBottom: 8, display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}
+                onContextMenu={(e) => openMessageContextMenu(e, m)}
               >
                 <div style={{ fontSize: 12, color: '#9aa8b8', marginBottom: 4, display: 'flex', gap: 8, alignItems: 'center' }} className="message-meta-compact">
                   <strong style={{ marginRight: 8 }}>{mine ? 'You' : senderName}</strong>
@@ -211,6 +376,7 @@ export default function MessageList({
                     maxWidth: '70%',
                     wordBreak: 'break-word',
                     boxShadow: isNew ? '0 10px 30px rgba(0,0,0,0.12)' : undefined,
+                    whiteSpace: 'pre-wrap',
                   }}
                 >
                   {m.content}
@@ -220,6 +386,37 @@ export default function MessageList({
           })}
         </div>
       ))}
+
+      {/* Message context menu */}
+      {ctxVisible && ctxTargetMessage ? (
+        <div style={menuStyle} role="menu" aria-hidden={!ctxVisible}>
+          {/* Only allow edit/delete for user's own messages */}
+          {isMessageMine(ctxTargetMessage.senderId) ? (
+            <>
+              <div style={menuItemStyle} onClick={() => onRequestEdit()}>✏️ Edit message</div>
+              <div style={{ height: 6 }} />
+              <div style={{ ...menuItemStyle, color: '#ffb4b4' }} onClick={() => onRequestDelete()}>🗑️ Delete message</div>
+            </>
+          ) : (
+            <>
+              <div style={{ ...menuItemStyle, color: '#9aa8b8' }}>No actions available</div>
+            </>
+          )}
+          <div style={{ height: 6 }} />
+          <div style={{ ...menuItemStyle, color: '#9aa8b8' }} onClick={() => closeMessageContextMenu()}>Close</div>
+        </div>
+      ) : null}
+
+      {/* Confirm delete popup (two-step) */}
+      {confirmVisible && ctxTargetMessage ? (
+        <div style={confirmStyle}>
+          <div style={{ marginBottom: 8 }}>Are you sure you want to delete this message?</div>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button onClick={() => { setConfirmVisible(false); closeMessageContextMenu(); }} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.04)', background: 'transparent', color: '#9aa8b8' }}>Cancel</button>
+            <button onClick={confirmDelete} style={{ padding: '6px 10px', borderRadius: 6, border: 'none', background: '#ff6b6b', color: '#fff' }}>Yes, delete</button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -229,4 +426,6 @@ MessageList.propTypes = {
   currentUserId: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
   participantNameMap: PropTypes.object,
   currentUserName: PropTypes.string,
+  onDeleteMessage: PropTypes.func,
+  onEditMessage: PropTypes.func,
 };

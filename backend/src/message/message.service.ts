@@ -93,7 +93,7 @@ export class MessageService {
 
   async clearHistory(conversationId: string) {
     const isDeleted = await this.message.deleteMany({
-      conversationId: new Types.ObjectId(conversationId),
+      conversationId,
     });
 
     if (!isDeleted) {
