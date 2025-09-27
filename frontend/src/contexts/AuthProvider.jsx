@@ -245,7 +245,6 @@ export default function AuthProvider({ children }) {
       console.warn('localStorage write failed', err?.message);
     }
 
-    console.log('AuthProvider.login saved', normalizedUser);
     return true;
   };
 

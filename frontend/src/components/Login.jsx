@@ -30,8 +30,6 @@ export default function Login() {
         // { withCredentials: true } // enable if backend uses cookies
       );
 
-      console.log('login response', res.data);
-
       // Normalize server response (many shapes exist)
       const data = res?.data ?? {};
       const access_token = data.access_token ?? data.accessToken ?? data.token ?? null;

@@ -17,13 +17,10 @@ import { ApiBearerAuth } from '@nestjs/swagger';
 @UseGuards(JwtAuthGuard)
 @Controller('conversations')
 export class ConversationController {
-  constructor(private readonly conversationService: ConversationService) {
-    console.log('controller is instantiatted');
-  }
+  constructor(private readonly conversationService: ConversationService) {}
 
   @Get('me')
   async listConversationsForUser(@CurrentUser() user: HydratedDocument<User>) {
-    console.log('conversations/me is called');
     return this.conversationService.listConversationForUser(
       user._id.toString(),
     );
