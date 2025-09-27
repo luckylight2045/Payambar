@@ -51,4 +51,9 @@ export class ConversationController {
   ) {
     return this.conversationService.deleteIfEmpty(id, user._id.toString());
   }
+
+  @Delete(':id')
+  async deleteConversation(@Param('id') conversationId: string) {
+    return await this.conversationService.deleteConversatiohn(conversationId);
+  }
 }

@@ -290,6 +290,8 @@ export class ChatGateway
 
       const convId = saved.conversationId.toString();
 
+      console.log(saved);
+
       client.to(convId).emit('receive_message', saved);
       client.emit('message_sent', saved);
 

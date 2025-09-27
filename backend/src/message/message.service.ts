@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Message, MessageType } from './schema/message.schema';
 import { Model, Types } from 'mongoose';
@@ -63,5 +63,43 @@ export class MessageService {
           : conversationId,
       })
       .exec();
+  }
+
+  async deleteMessage(messageId: string, conversationId: string) {
+    const isDeleted = await this.message.deleteOne({
+      _id: messageId,
+      conversationId,
+    });
+
+    if (!isDeleted) {
+      throw new NotFoundException('message does not exist');
+    }
+
+    return isDeleted;
+  }
+
+  async editMessage(messageId: string, content: string) {
+    const isEdited = await this.message.updateOne(
+      { _id: messageId },
+      { content },
+    );
+
+    if (!isEdited) {
+      throw new NotFoundException('messsage does not exist');
+    }
+
+    return isEdited;
+  }
+
+  async clearHistory(conversationId: string) {
+    const isDeleted = await this.message.deleteMany({
+      conversationId: new Types.ObjectId(conversationId),
+    });
+
+    if (!isDeleted) {
+      throw new NotFoundException('no messages with the conversationId');
+    }
+
+    return isDeleted;
   }
 }

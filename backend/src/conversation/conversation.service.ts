@@ -153,4 +153,18 @@ export class ConversationService {
     await this.conversation.deleteOne({ _id: conversationId }).exec();
     return { deleted: true };
   }
+
+  async deleteConversatiohn(conversationId: string) {
+    const isDeleted = await this.conversation.deleteOne({
+      _id: conversationId,
+    });
+
+    if (!isDeleted) {
+      throw new NotFoundException(
+        'conversationId does not match any conversation',
+      );
+    }
+
+    return isDeleted;
+  }
 }
