@@ -1,3 +1,4 @@
+/* eslint-disable no-empty */
 /* eslint-disable no-unused-vars */
 // src/components/MessageList.jsx
 import React, { useEffect, useRef, useState } from 'react';
@@ -148,17 +149,53 @@ export default function MessageList({
   // Context menu helpers
   const openMessageContextMenu = (e, message) => {
     e.preventDefault();
+    // adjust position if it would overflow right/bottom of viewport
+    const padding = 12;
+    const menuWidth = 220; // approx width of menu
+    const menuHeight = 140; // approx height (including confirm)
+    let x = e.clientX;
+    let y = e.clientY;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    if (x + menuWidth + padding > vw) {
+      x = Math.max(padding, vw - menuWidth - padding);
+    }
+    if (y + menuHeight + padding > vh) {
+      y = Math.max(padding, vh - menuHeight - padding);
+    }
+
     setCtxTargetMessage(message);
-    setCtxX(e.clientX);
-    setCtxY(e.clientY);
+    setCtxX(x);
+    setCtxY(y);
     setConfirmVisible(false);
     setCtxVisible(true);
+
+    // add global click listener to close when clicking outside
+    setTimeout(() => {
+      window.addEventListener('click', handleOutsideClick);
+    }, 0);
   };
 
   const closeMessageContextMenu = () => {
     setCtxVisible(false);
     setCtxTargetMessage(null);
     setConfirmVisible(false);
+    try {
+      window.removeEventListener('click', handleOutsideClick);
+    } catch {}
+  };
+
+  const handleOutsideClick = (ev) => {
+    // if user clicked inside menu area, ignore
+    const ex = ctxX;
+    const ey = ctxY;
+    const menuRect = { left: ex, top: ey, right: ex + 240, bottom: ey + 200 };
+    const cx = ev.clientX;
+    const cy = ev.clientY;
+    if (cx >= menuRect.left && cx <= menuRect.right && cy >= menuRect.top && cy <= menuRect.bottom) {
+      return;
+    }
+    closeMessageContextMenu();
   };
 
   // Delete flow
@@ -354,6 +391,9 @@ export default function MessageList({
               );
             }
 
+            // Determine whether the message has been edited (backend uses isEdited)
+            const wasEdited = !!(m.isEdited || m.edited);
+
             return (
               <div
                 key={key}
@@ -381,6 +421,13 @@ export default function MessageList({
                 >
                   {m.content}
                 </div>
+
+                {/* Edited indicator: show immediately if isEdited or edited flag present */}
+                {wasEdited ? (
+                  <div style={{ fontSize: 11, color: '#9aa8b8', marginTop: 6, marginLeft: 6 }}>
+                    Edited
+                  </div>
+                ) : null}
               </div>
             );
           })}

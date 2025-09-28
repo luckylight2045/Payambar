@@ -32,6 +32,9 @@ export class Message {
   @Prop({ type: Date, default: null })
   readAt?: Date;
 
+  @Prop({ default: false })
+  isEdited: boolean;
+
   @Prop({ default: Date.now, timestamp: true })
   createdAt: Date;
 

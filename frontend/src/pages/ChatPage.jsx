@@ -583,32 +583,42 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
   // EDIT message (called by MessageList)
   const handleEditMessage = async (messageId, newContent) => {
     if (!messageId) return { ok: false, error: 'no id' };
-    if (!newContent || String(newContent).trim().length === 0) {
-      return { ok: false, error: 'content required' };
+    if (newContent === null || newContent === undefined) return { ok: false, error: 'content required' };
+    const normalizedNew = String(newContent);
+
+    // find original message in current messages state
+    const origMsg = (messages || []).find((m) => String(m._id ?? m.id ?? '') === String(messageId));
+    const origContent = origMsg ? String(origMsg.content ?? '') : null;
+
+    // If we know the original content and it is identical to the new content => nothing to do.
+    if (origContent !== null && String(origContent) === normalizedNew) {
+      // do not call backend, do not set isEdited, but return success so the edit UI closes.
+      return { ok: true, edited: false };
     }
+
+    // If this is a draft conversation (not yet persisted): update local state only when changed.
     if (!loadedConvId) {
-      // local edit for draft
       setMessages((prev) => (prev || []).map((m) => {
         if (String(m._id ?? m.id ?? '') === String(messageId)) {
-          return { ...m, content: newContent, edited: true, updatedAt: new Date().toISOString() };
+          return { ...m, content: normalizedNew, isEdited: true, updatedAt: new Date().toISOString() };
         }
         return m;
       }));
       return { ok: true };
     }
 
+    // persisted conversation: call backend only if content changed
     try {
       const res = await axios.patch(
         `http://localhost:3000/messages/${encodeURIComponent(messageId)}`,
-        { content: newContent },
+        { content: normalizedNew },
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      // assume success if status 2xx
-      // Update local messages
+      // Assume success (2xx). Update local messages to reflect the new content and isEdited flag.
       setMessages((prev) => (prev || []).map((m) => {
         if (String(m._id ?? m.id ?? '') === String(messageId)) {
-          return { ...m, content: newContent, edited: true, updatedAt: new Date().toISOString() };
+          return { ...m, content: normalizedNew, isEdited: true, updatedAt: new Date().toISOString() };
         }
         return m;
       }));
@@ -619,7 +629,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
           const lm = c.lastMessage ?? null;
           const lmId = lm ? (lm._id ?? lm.id ?? null) : null;
           if (String(lmId) === String(messageId)) {
-            const newLast = { ...(lm || {}), content: newContent, updatedAt: new Date().toISOString() };
+            const newLast = { ...(lm || {}), content: normalizedNew, isEdited: true, updatedAt: new Date().toISOString() };
             return { ...c, lastMessage: newLast };
           }
         }

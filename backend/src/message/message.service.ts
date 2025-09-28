@@ -78,17 +78,30 @@ export class MessageService {
     return isDeleted;
   }
 
-  async editMessage(messageId: string, content: string) {
-    const isEdited = await this.message.updateOne(
-      { _id: messageId },
-      { content },
-    );
+  async getMessageById(messageId: string) {
+    return await this.message.findOne({ _id: messageId });
+  }
 
-    if (!isEdited) {
-      throw new NotFoundException('messsage does not exist');
+  async editMessage(messageId: string, content: string) {
+    const message = await this.getMessageById(messageId);
+
+    if (!message) {
+      throw new NotFoundException('message does not exist');
     }
 
-    return isEdited;
+    if (message.content !== content) {
+      const isEdited = await this.message.updateOne(
+        { _id: messageId },
+        { content, isEdited: true },
+      );
+      if (!isEdited) {
+        throw new NotFoundException('messsage does not exist');
+      }
+
+      return isEdited;
+    }
+
+    return;
   }
 
   async clearHistory(conversationId: string) {
