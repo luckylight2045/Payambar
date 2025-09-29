@@ -20,6 +20,7 @@ import { createClient as createNodeRedisClient } from 'redis';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { JwtPayload } from 'src/auth/interfaces/jwt.payload';
 import { UserService } from 'src/user/user.service';
+import { MessageService } from 'src/message/message.service';
 
 type AuthSocket = Socket<any, any, any, { userId?: string }>;
 
@@ -35,6 +36,7 @@ export class ChatGateway
     private readonly configService: ConfigService,
     private readonly jwtService: JwtService,
     private readonly userService: UserService,
+    private readonly messageService: MessageService,
     @InjectRedis() private readonly ioredis: Redis,
   ) {}
 
@@ -58,6 +60,7 @@ export class ChatGateway
         ? (auth as Record<string, string>)['token']
         : undefined;
 
+    console.log('handleConnection');
     if (typeof maybeToken !== 'string') {
       this.logger.warn(`socket ${client.id} connected without token`);
       client.emit('error', 'Authentication required');
@@ -99,7 +102,7 @@ export class ChatGateway
           .multi()
           .sadd(`online:${userId}`, socketId)
           .sadd('online_users', userId)
-          .set(`socket:${socketId}`, userId)
+          .set(`socket:${socketId}`, userId, 'EX', 86400)
           .exec();
       } catch (err) {
         this.logger.warn(
@@ -108,8 +111,38 @@ export class ChatGateway
         );
       }
 
+      try {
+        const members = await this.ioredis.smembers(`online:${userId}`);
+        if (members && members.length > 0) {
+          const pipeline = this.ioredis.pipeline();
+          members.forEach((sid) => pipeline.exists(`socket:${sid}`));
+          const existsResults = await pipeline.exec();
+          if (!existsResults) {
+            throw new NotFoundException('no results found');
+          }
+          const stale: string[] = [];
+          existsResults.forEach((res, i) => {
+            const [err, val] = res as [Error | null, number | null];
+            const exists = !err && val === 1;
+            if (!exists) stale.push(members[i]);
+          });
+          if (stale.length > 0) {
+            const pipe2 = this.ioredis.multi();
+            pipe2.srem(`online:${userId}`, ...stale);
+            stale.forEach((sid) => pipe2.del(`socket:${sid}`));
+            await pipe2.exec();
+            this.logger.log(
+              `Pruned stale sockets for user ${userId}: ${stale.join(',')}`,
+            );
+          }
+        }
+      } catch (err) {
+        this.logger.warn(
+          'Failed to prune stale sockets',
+          (err as Error).message,
+        );
+      }
       const remaining = await this.ioredis.scard(`online:${userId}`);
-
       if (remaining === 1) {
         this.server.emit('user_connected', { userId });
         this.logger.log(`User ${userId} is now online`);
@@ -133,6 +166,7 @@ export class ChatGateway
   async handleDisconnect(client: AuthSocket) {
     const socketId = client.id;
     let userId: string | null = null;
+    console.log('handleDisconnect');
     try {
       if (client.data && typeof client.data.userId === 'string') {
         userId = client.data.userId;
@@ -173,7 +207,34 @@ export class ChatGateway
     }
 
     try {
+      const members = await this.ioredis.smembers(`online:${userId}`);
+      if (members && members.length > 0) {
+        const pipeline = this.ioredis.pipeline();
+        members.forEach((sid) => pipeline.exists(`socket:${sid}`));
+        const existsResults = await pipeline.exec();
+        if (!existsResults) {
+          throw new NotFoundException();
+        }
+        const stale: string[] = [];
+        existsResults.forEach((res, i) => {
+          const [err, val] = res as [Error | null, number | null];
+          const exists = !err && val === 1;
+          if (!exists) stale.push(members[i]);
+        });
+        if (stale.length > 0) {
+          const p2 = this.ioredis.multi();
+          p2.srem(`online:${userId}`, ...stale);
+          stale.forEach((sid) => p2.del(`socket:${sid}`));
+          await p2.exec();
+          this.logger.log(
+            `Pruned stale sockets for user ${userId} on disconnect: ${stale.join(',')}`,
+          );
+        }
+      }
+
       const remaining = await this.ioredis.scard(`online:${userId}`);
+      this.logger.debug('remaining', remaining);
+
       if (remaining === 0) {
         try {
           await this.ioredis.srem('online_users', userId);
@@ -257,6 +318,156 @@ export class ChatGateway
 
     await client.leave(convId);
     this.logger.debug(`User ${userId} left room ${convId}`);
+  }
+
+  @SubscribeMessage('messages_received')
+  async handleMessagesReceived(
+    @MessageBody()
+    data: {
+      messageIds?: string[];
+      messageId?: string;
+      conversationId?: string;
+      upToMessageId?: string;
+    },
+    @ConnectedSocket() client: AuthSocket,
+  ) {
+    const recipientId = client?.data?.userId;
+    if (typeof recipientId !== 'string') {
+      client.emit('error', 'Unauthenticated');
+      return;
+    }
+
+    try {
+      let idsToProcess: string[] = [];
+
+      if (Array.isArray(data?.messageIds) && data.messageIds.length > 0) {
+        idsToProcess = data.messageIds.filter(Boolean).map(String);
+      } else if (data?.messageId) {
+        idsToProcess = [String(data.messageId)];
+      } else if (data?.conversationId && data?.upToMessageId) {
+        const upToMsg = await this.messageService.getMessageById(
+          String(data.upToMessageId),
+        );
+        if (!upToMsg || !upToMsg.createdAt) {
+          client.emit('messages_received_ack', {
+            ok: true,
+            processed: 0,
+            results: [],
+          });
+          return;
+        }
+        const beforeDate = new Date(new Date(upToMsg.createdAt).getTime() + 1);
+        const msgs = await this.messageService.getMessagesForConversation(
+          String(data.conversationId),
+          {
+            limit: 1000,
+            beforeDate,
+          },
+        );
+        const msgsAny = Array.isArray(msgs) ? (msgs as any[]) : [];
+        idsToProcess = msgsAny
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+          .map((m: any) => String(m._id ?? m.id ?? ''))
+          .filter(Boolean);
+      } else {
+        client.emit('messages_received_ack', {
+          ok: false,
+          reason: 'no_ids_provided',
+        });
+        return;
+      }
+
+      if (idsToProcess.length === 0) {
+        client.emit('messages_received_ack', {
+          ok: true,
+          processed: 0,
+          results: [],
+        });
+        return;
+      }
+
+      await this.messageService.markAsDelivered({
+        recipientId: recipientId,
+        messageIds: idsToProcess,
+        conversationId: data?.conversationId ?? '',
+      });
+
+      const fetched = await Promise.all(
+        idsToProcess.map((id) =>
+          this.messageService.getMessageById(String(id)),
+        ),
+      );
+
+      const results: Array<{
+        messageId: string;
+        ok: boolean;
+        reason?: string;
+        deliveredAt?: string;
+      }> = [];
+      const seen = new Set<string>();
+
+      for (const m of fetched) {
+        if (!m) continue;
+        const mid = String(m._id ?? m.id ?? '');
+        if (!mid || seen.has(mid)) continue;
+        seen.add(mid);
+        const senderRaw = m.senderId;
+        let senderId: string | null = null;
+        if (senderRaw && typeof senderRaw === 'object') {
+          senderId = String(senderRaw._id ?? senderRaw.id ?? senderRaw);
+        } else if (senderRaw) {
+          senderId = String(senderRaw);
+        }
+        const deliveredAtIso = m.deliveredAt
+          ? new Date(m.deliveredAt).toISOString()
+          : new Date().toISOString();
+        if (senderId && senderId !== String(recipientId)) {
+          try {
+            await this.notifyUser(
+              senderId,
+              'message_delivered',
+              {
+                messageId: mid,
+                recipientId,
+                deliveredAt: deliveredAtIso,
+              },
+              undefined,
+            );
+            results.push({
+              messageId: mid,
+              ok: true,
+              deliveredAt: deliveredAtIso,
+            });
+          } catch (err) {
+            results.push({
+              messageId: mid,
+              ok: false,
+              reason: (err as Error).message,
+            });
+          }
+        } else {
+          results.push({
+            messageId: mid,
+            ok: false,
+            reason: 'no_sender_or_self',
+          });
+        }
+      }
+
+      client.emit('messages_received_ack', {
+        ok: true,
+        processed: results.length,
+        results,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `handleMessagesReceived failed: ${(err as Error).message}`,
+      );
+      client.emit('messages_received_ack', {
+        ok: false,
+        error: (err as Error).message,
+      });
+    }
   }
 
   @SubscribeMessage('send_message')

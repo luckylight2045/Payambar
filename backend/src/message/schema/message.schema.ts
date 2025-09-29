@@ -29,6 +29,9 @@ export class Message {
   @Prop({ type: Date, default: null })
   deliveredAt?: Date;
 
+  @Prop({ type: Array, default: [] })
+  deliveredTo: string[];
+
   @Prop({ type: Date, default: null })
   readAt?: Date;
 

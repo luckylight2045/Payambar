@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Message, MessageType } from './schema/message.schema';
 import { Model, Types } from 'mongoose';
@@ -114,5 +118,100 @@ export class MessageService {
     }
 
     return isDeleted;
+  }
+
+  async markAsDelivered(options: {
+    recipientId: string;
+    messageId?: string;
+    messageIds?: string[];
+    conversationId: string;
+    upToMessageId?: string;
+  }) {
+    const { recipientId } = options;
+    if (!recipientId) {
+      throw new BadRequestException('receipentId is required');
+    }
+
+    const recipientOid = Types.ObjectId.isValid(recipientId)
+      ? new Types.ObjectId(recipientId)
+      : recipientId;
+
+    if (Array.isArray(options.messageIds) && options.messageIds.length > 0) {
+      const oids = options.messageIds
+        .filter(Boolean)
+        .map((id) =>
+          Types.ObjectId.isValid(id) ? new Types.ObjectId(id) : id,
+        );
+
+      const res = await this.message
+        .updateMany(
+          { _id: { $in: oids } },
+          {
+            $addToSet: {
+              deliveredTo: recipientId,
+              deliveredAt: new Date(),
+              readAt: new Date(),
+              isRead: true,
+            },
+          },
+        )
+        .exec();
+      return {
+        matchedCount: res.matchedCount,
+        modifiedCount: res.modifiedCount,
+      };
+    }
+
+    if (options.conversationId && options.upToMessageId) {
+      const upTo = await this.message
+        .findById(options.upToMessageId)
+        .select('createdAt')
+        .lean()
+        .exec();
+
+      if (!upTo) {
+        return { matchedCount: 0, modifiedCount: 0 };
+      }
+
+      const query = {
+        conversationId: Types.ObjectId.isValid(options.conversationId)
+          ? new Types.ObjectId(options.conversationId)
+          : options.conversationId,
+        deliveredTo: { $ne: recipientId },
+        createdAt: new Date(),
+      };
+
+      const res = await this.message.updateMany(query, {
+        $addToSet: {
+          deliveredTo: recipientId,
+          isRead: true,
+          readAt: new Date(),
+          deliveredAt: new Date(),
+        },
+      });
+
+      return {
+        matchedCount: res.matchedCount,
+        modifiedCount: res.modifiedCount,
+      };
+    }
+
+    if (options.messageId) {
+      const mid = options.messageId;
+      const res = await this.message
+        .updateOne(
+          { _id: Types.ObjectId.isValid(mid) ? new Types.ObjectId(mid) : mid },
+          { $addToSet: { deliveredTo: recipientOid } },
+        )
+        .exec();
+      return {
+        matchedCount: res.matchedCount,
+        modifiedCount: res.modifiedCount ?? 0,
+      };
+    }
+
+    throw new Error(
+      'No messageId/messageIds or conversationId+upToMessageId provided',
+    );
   }
 }

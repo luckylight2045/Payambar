@@ -4,21 +4,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
 
-/**
- * MessageList
- * - groups messages by day
- * - shows time as HH:MM
- * - animates newly arrived messages with a small slide/fade animation
- * - supports right-click context menu per-message with "Edit" and "Delete"
- *
- * Props:
- *  - messages: array of message objects (expected chronological ascending)
- *  - currentUserId: string
- *  - participantNameMap: { userId -> displayName }
- *  - currentUserName: optional
- *  - onDeleteMessage(messageId, messageObj) => Promise (provided by parent)
- *  - onEditMessage(messageId, newContent) => Promise<{ok:true}|{ok:false,error}>
- */
 export default function MessageList({
   messages = [],
   currentUserId,
@@ -30,20 +15,16 @@ export default function MessageList({
   const seenKeysRef = useRef(new Set());
   const [newKeys, setNewKeys] = useState(new Set());
 
-  // context menu state for messages
   const [ctxVisible, setCtxVisible] = useState(false);
   const [ctxX, setCtxX] = useState(0);
   const [ctxY, setCtxY] = useState(0);
   const [ctxTargetMessage, setCtxTargetMessage] = useState(null);
 
-  // confirm delete popup state
   const [confirmVisible, setConfirmVisible] = useState(false);
 
-  // editing state
   const [editingId, setEditingId] = useState(null);
   const [editValue, setEditValue] = useState('');
 
-  // compute deterministic key for a message
   const messageKey = (m, idx) => {
     if (!m) return `missing-${idx}`;
     return m._id ?? m.id ?? (m.createdAt ? `${m.createdAt}-${idx}` : `idx-${idx}`);
@@ -115,7 +96,6 @@ export default function MessageList({
     return currentUserId && String(currentUserId) === String(sender);
   };
 
-  // Group messages by day
   const groups = {};
   for (const m of messages) {
     const d = m.createdAt ? new Date(m.createdAt) : new Date();
@@ -146,13 +126,11 @@ export default function MessageList({
     }
   };
 
-  // Context menu helpers
   const openMessageContextMenu = (e, message) => {
     e.preventDefault();
-    // adjust position if it would overflow right/bottom of viewport
     const padding = 12;
-    const menuWidth = 220; // approx width of menu
-    const menuHeight = 140; // approx height (including confirm)
+    const menuWidth = 220;
+    const menuHeight = 140;
     let x = e.clientX;
     let y = e.clientY;
     const vw = window.innerWidth;
@@ -170,7 +148,6 @@ export default function MessageList({
     setConfirmVisible(false);
     setCtxVisible(true);
 
-    // add global click listener to close when clicking outside
     setTimeout(() => {
       window.addEventListener('click', handleOutsideClick);
     }, 0);
@@ -186,7 +163,6 @@ export default function MessageList({
   };
 
   const handleOutsideClick = (ev) => {
-    // if user clicked inside menu area, ignore
     const ex = ctxX;
     const ey = ctxY;
     const menuRect = { left: ex, top: ey, right: ex + 240, bottom: ey + 200 };
@@ -198,9 +174,7 @@ export default function MessageList({
     closeMessageContextMenu();
   };
 
-  // Delete flow
   const onRequestDelete = () => {
-    // show confirmation UI (two-step)
     setConfirmVisible(true);
   };
 
@@ -214,17 +188,14 @@ export default function MessageList({
       if (onDeleteMessage) {
         await onDeleteMessage(id, ctxTargetMessage);
       }
-    } catch (e) {
-      // parent will alert on error
-    } finally {
+    } catch (e) {}
+    finally {
       closeMessageContextMenu();
     }
   };
 
-  // Edit flow
   const onRequestEdit = () => {
     if (!ctxTargetMessage) return;
-    // only allow editing your own messages
     const mine = isMessageMine(ctxTargetMessage.senderId);
     if (!mine) {
       closeMessageContextMenu();
@@ -233,7 +204,6 @@ export default function MessageList({
     setEditingId(ctxTargetMessage._id ?? ctxTargetMessage.id);
     setEditValue(ctxTargetMessage.content ?? '');
     closeMessageContextMenu();
-    // focus will be handled in edit input via autoFocus
   };
 
   const cancelEdit = () => {
@@ -245,33 +215,27 @@ export default function MessageList({
     if (!editingId) return;
     const newContent = String(editValue || '').trim();
     if (!newContent) {
-      // Do nothing empty
       return;
     }
     if (onEditMessage) {
       const res = await onEditMessage(editingId, newContent);
       if (res && res.ok) {
-        // parent updates state — we just clear editing UI
         setEditingId(null);
         setEditValue('');
       } else {
         alert('Failed to edit message' + (res && res.error ? `: ${res.error}` : ''));
       }
     } else {
-      // fallback (shouldn't happen if parent passed handler)
       setMessagesLocalEdit(editingId, newContent);
       setEditingId(null);
       setEditValue('');
     }
   };
 
-  // local fallback edit (not used normally)
   const setMessagesLocalEdit = (messageId, content) => {
-    // Only if you had local setter; not available in this component — noop
     console.warn('local edit happened but parent did not provide onEditMessage');
   };
 
-  // keyboard handler for edit (Enter to save, Shift+Enter newline, Esc cancel)
   const handleEditKeyDown = (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
@@ -284,7 +248,6 @@ export default function MessageList({
     }
   };
 
-  // small inline styles for the menu
   const menuStyle = {
     position: 'fixed',
     left: ctxX,
@@ -300,7 +263,6 @@ export default function MessageList({
   };
   const menuItemStyle = { padding: '8px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 14 };
 
-  // confirm popup style (positioned near same coords)
   const confirmStyle = {
     position: 'fixed',
     left: ctxX,
@@ -313,7 +275,6 @@ export default function MessageList({
     boxShadow: '0 6px 20px rgba(0,0,0,0.6)',
   };
 
-  // Inline CSS for animation
   const styles = (
     <style>
       {`
@@ -336,9 +297,53 @@ export default function MessageList({
         resize: vertical;
         min-height:36px;
       }
+      .tick {
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        margin-left:8px;
+        opacity:0.9;
+      }
+      .tick svg { width:16px; height:12px; vertical-align:middle; }
+      .tick.single svg path { stroke:#9aa8b8; }
+      .tick.double svg path { stroke:#2b6ef6; }
       `}
     </style>
   );
+
+  const tickNodeFor = (m) => {
+    const mine = isMessageMine(m.senderId);
+    if (!mine) return null;
+    const isRead = !!(m.isRead || m.readAt);
+    const isDelivered = !!(m.deliveredAt || m.deliveredTo || m.isDelivered);
+    if (isRead) {
+      return (
+        <span className="tick double" title={`Read ${m.readAt ? new Date(m.readAt).toLocaleString() : ''}`}>
+          <svg viewBox="0 0 22 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M1 8l5 5 14-14" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M1 11l5 5 14-14" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.95" />
+          </svg>
+        </span>
+      );
+    }
+    if (isDelivered) {
+      return (
+        <span className="tick single" title={`Delivered ${m.deliveredAt ? new Date(m.deliveredAt).toLocaleString() : ''}`}>
+          <svg viewBox="0 0 12 10" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M1 5l3 3 7-7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+      );
+    }
+    // If neither delivered nor read, show a small hollow circle indicating "sent" (or nothing)
+    return (
+      <span className="tick single" title="Sent">
+        <svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="5" cy="5" r="3" strokeWidth="1.2" fill="none" />
+        </svg>
+      </span>
+    );
+  };
 
   return (
     <div className="message-list" style={{ padding: 8 }}>
@@ -364,7 +369,6 @@ export default function MessageList({
             const isNew = newKeys.has(key);
             const messageId = m._id ?? m.id ?? key;
 
-            // If this message is being edited, render the edit input
             if (String(editingId) === String(messageId)) {
               return (
                 <div key={key} style={{ marginBottom: 8, display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
@@ -391,7 +395,6 @@ export default function MessageList({
               );
             }
 
-            // Determine whether the message has been edited (backend uses isEdited)
             const wasEdited = !!(m.isEdited || m.edited);
 
             return (
@@ -417,12 +420,17 @@ export default function MessageList({
                     wordBreak: 'break-word',
                     boxShadow: isNew ? '0 10px 30px rgba(0,0,0,0.12)' : undefined,
                     whiteSpace: 'pre-wrap',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
                   }}
                 >
-                  {m.content}
+                  <div style={{ flex: 1 }}>{m.content}</div>
+                  <div style={{ flexShrink: 0 }}>
+                    {tickNodeFor(m)}
+                  </div>
                 </div>
 
-                {/* Edited indicator: show immediately if isEdited or edited flag present */}
                 {wasEdited ? (
                   <div style={{ fontSize: 11, color: '#9aa8b8', marginTop: 6, marginLeft: 6 }}>
                     Edited
@@ -434,10 +442,8 @@ export default function MessageList({
         </div>
       ))}
 
-      {/* Message context menu */}
       {ctxVisible && ctxTargetMessage ? (
         <div style={menuStyle} role="menu" aria-hidden={!ctxVisible}>
-          {/* Only allow edit/delete for user's own messages */}
           {isMessageMine(ctxTargetMessage.senderId) ? (
             <>
               <div style={menuItemStyle} onClick={() => onRequestEdit()}>✏️ Edit message</div>
@@ -454,7 +460,6 @@ export default function MessageList({
         </div>
       ) : null}
 
-      {/* Confirm delete popup (two-step) */}
       {confirmVisible && ctxTargetMessage ? (
         <div style={confirmStyle}>
           <div style={{ marginBottom: 8 }}>Are you sure you want to delete this message?</div>

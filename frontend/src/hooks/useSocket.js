@@ -22,7 +22,6 @@ export default function useSocket({ token }) {
           ref.current.removeAllListeners();
           ref.current.disconnect();
         } catch (e) {
-          // eslint-disable-next-line no-console
           console.warn('[useSocket] disconnect error', e && e.message);
         }
         ref.current = null;
@@ -40,15 +39,12 @@ export default function useSocket({ token }) {
 
     // Basic debug logging
     socket.on('connect', () => {
-      // eslint-disable-next-line no-console
       console.debug('[useSocket] connected', socket.id);
     });
     socket.on('connect_error', (err) => {
-      // eslint-disable-next-line no-console
       console.warn('[useSocket] connect_error', err && (err.message || err));
     });
     socket.on('disconnect', (reason) => {
-      // eslint-disable-next-line no-console
       console.debug('[useSocket] disconnected', reason);
     });
 
@@ -60,7 +56,6 @@ export default function useSocket({ token }) {
         // Immediately disconnect to avoid misleading server-side state.
         socket.disconnect();
       } catch (e) {
-        // eslint-disable-next-line no-console
         console.warn('[useSocket] disconnect on offline failed', e && e.message);
       }
     };
@@ -70,7 +65,6 @@ export default function useSocket({ token }) {
         // Try to reconnect — server should emit online_list on connect
         socket.connect();
       } catch (e) {
-        // eslint-disable-next-line no-console
         console.warn('[useSocket] connect on online failed', e && e.message);
       }
     };
@@ -85,7 +79,6 @@ export default function useSocket({ token }) {
         socket.removeAllListeners();
         socket.disconnect();
       } catch (e) {
-        // eslint-disable-next-line no-console
         console.warn('[useSocket] cleanup failed', e && e.message);
       }
       ref.current = null;

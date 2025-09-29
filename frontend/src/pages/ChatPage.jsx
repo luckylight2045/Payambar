@@ -20,13 +20,6 @@ import {
   formatConversationTime,
 } from '../utils/chatUtils';
 
-/**
- * ChatPage (full)
- *
- * NOTE: This file was extended with `handleEditMessage` and MessageList is now passed
- * both `onDeleteMessage` and `onEditMessage`.
- */
-
 export default function ChatPage() {
   const css = `
 :root{
@@ -132,7 +125,39 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     setTypingRenderState(newRender);
   }, [currentUserId]);
 
-  // socket listeners (unchanged)
+  const inferParticipantsFromMessage = (message) => {
+    const parts = Array.isArray(message?.participants) ? message.participants.slice() : [];
+    if (parts.length > 0) return parts;
+    if (Array.isArray(message?.participantIds) && message.participantIds.length > 0) {
+      const inferred = message.participantIds.map((id) => (typeof id === 'object' ? id : { _id: id }));
+      if (inferred.length > 0) {
+        // Ensure current user appears too
+        if (!inferred.some((p) => String(utilParticipantId(p)) === String(currentUserId))) {
+          inferred.push({ _id: currentUserId });
+        }
+        return inferred;
+      }
+    }
+    const inferred = [];
+    if (message?.senderId) inferred.push({ _id: message.senderId });
+    if (draftConversation && typeof draftConversation.userId === 'string') {
+      const draftOther = draftConversation.userId;
+      if (!inferred.some((p) => String(utilParticipantId(p)) === String(draftOther))) {
+        inferred.push({ _id: draftOther });
+      }
+      if (!inferred.some((p) => String(utilParticipantId(p)) === String(currentUserId))) {
+        inferred.push({ _id: currentUserId });
+      }
+      return inferred;
+    }
+    if (inferred.length === 1) {
+      if (String(inferred[0]._id) !== String(currentUserId)) {
+        inferred.push({ _id: currentUserId });
+      }
+    }
+    return inferred;
+  };
+
   useEffect(() => {
     const s = socketRef?.current;
     if (!s) return () => {};
@@ -175,18 +200,19 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     const onReceiveMessage = (message) => {
       if (!message) return;
 
+      const participants = inferParticipantsFromMessage(message);
       setConversations((prev) => {
         const copy = (prev || []).slice();
         const idx = copy.findIndex((c) => String(c._id) === String(message.conversationId));
         if (idx !== -1) {
-          copy[idx] = { ...copy[idx], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() };
+          copy[idx] = { ...copy[idx], lastMessage: message, participants, updatedAt: message.createdAt ?? new Date().toISOString() };
           return copy;
         }
-        return [{ _id: message.conversationId, participants: message.participants ?? [], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...copy];
+        return [{ _id: message.conversationId, participants, lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...copy];
       });
 
       try {
-        const parts = message.participants ?? [];
+        const parts = participants || [];
         for (const p of parts) {
           const pid = utilParticipantId(p);
           if (!pid) continue;
@@ -196,24 +222,29 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 
       if (String(message.conversationId) === String(loadedConvId)) {
         setMessages((prev) => [...prev, message]);
+        try {
+          socketRef?.current?.emit('messages_received', { messageIds: [String(message._id ?? message.id ?? '')] });
+        } catch (e) {}
       }
     };
 
     const onMessageSent = (message) => {
       if (!message) return;
+      const participants = inferParticipantsFromMessage(message);
+
       setConversations((prev) => {
         const idx = (prev || []).findIndex((c) => String(c._id) === String(message.conversationId));
         if (idx !== -1) {
-          const item = { ...prev[idx], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() };
+          const item = { ...prev[idx], lastMessage: message, participants, updatedAt: message.createdAt ?? new Date().toISOString() };
           const copy = prev.slice();
           copy.splice(idx, 1);
           return [item, ...copy];
         }
-        return [{ _id: message.conversationId, participants: message.participants ?? [], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...(prev || [])];
+        return [{ _id: message.conversationId, participants, lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...(prev || [])];
       });
 
       try {
-        const parts = message.participants ?? [];
+        const parts = participants || [];
         for (const p of parts) {
           const pid = utilParticipantId(p);
           if (!pid) continue;
@@ -223,9 +254,70 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 
       if (String(message.conversationId) === String(loadedConvId)) {
         setMessages((prev) => [...prev, message]);
+      } else if (activeConvId && String(activeConvId).startsWith('draft:')) {
+        const draftUid = draftConversation?.userId ?? String(activeConvId).replace(/^draft:/, '');
+        const partsFlat = (participants || []).map((p) => utilParticipantId(p) || (typeof p === 'string' ? p : null)).filter(Boolean);
+        const otherMatch = partsFlat.some((id) => String(id) === String(draftUid));
+        if (otherMatch || (String(message.senderId) === String(currentUserId) && String(message.conversationId))) {
+          setMessages((prev) => [...prev, message]);
+        }
       }
+
+      if (draftConversation) {
+        const draftUid = String(draftConversation.userId);
+        const partsFlat = (participants || []).map((p) => utilParticipantId(p) || (typeof p === 'string' ? p : null)).filter(Boolean);
+        if (partsFlat.some((id) => String(id) === draftUid) || (String(message.senderId) === String(currentUserId) && partsFlat.length === 0)) {
+          setConversations((prev) => removeDraftForUser(prev, draftUid));
+          setDraftConversation(null);
+        }
+      }
+
       setActiveConvId(String(message.conversationId));
       setLoadedConvId(String(message.conversationId));
+    };
+
+    const onMessageDelivered = (payload) => {
+      if (!payload || !payload.messageId) return;
+      const mid = String(payload.messageId);
+      const deliveredAt = payload.deliveredAt ?? new Date().toISOString();
+      setMessages((prev) => (prev || []).map((m) => {
+        const id = String(m._id ?? m.id ?? '');
+        if (id === mid) {
+          return { ...m, deliveredAt };
+        }
+        return m;
+      }));
+      setConversations((prev) => (prev || []).map((c) => {
+        const lm = c.lastMessage ?? null;
+        const lmId = lm ? String(lm._id ?? lm.id ?? '') : null;
+        if (lmId === mid) {
+          const newLast = { ...(lm || {}), deliveredAt };
+          return { ...c, lastMessage: newLast };
+        }
+        return c;
+      }));
+    };
+
+    const onMessageRead = (payload) => {
+      if (!payload || !payload.messageId) return;
+      const mid = String(payload.messageId);
+      const readAt = payload.readAt ?? new Date().toISOString();
+      setMessages((prev) => (prev || []).map((m) => {
+        const id = String(m._id ?? m.id ?? '');
+        if (id === mid) {
+          return { ...m, readAt, isRead: true };
+        }
+        return m;
+      }));
+      setConversations((prev) => (prev || []).map((c) => {
+        const lm = c.lastMessage ?? null;
+        const lmId = lm ? String(lm._id ?? lm.id ?? '') : null;
+        if (lmId === mid) {
+          const newLast = { ...(lm || {}), readAt, isRead: true };
+          return { ...c, lastMessage: newLast };
+        }
+        return c;
+      }));
     };
 
     s.on('online_list', onOnlineList);
@@ -234,6 +326,8 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     s.on('typing', onTyping);
     s.on('receive_message', onReceiveMessage);
     s.on('message_sent', onMessageSent);
+    s.on('message_delivered', onMessageDelivered);
+    s.on('message_read', onMessageRead);
 
     return () => {
       try {
@@ -243,11 +337,13 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         s.off('typing', onTyping);
         s.off('receive_message', onReceiveMessage);
         s.off('message_sent', onMessageSent);
+        s.off('message_delivered', onMessageDelivered);
+        s.off('message_read', onMessageRead);
       } catch (e) {
         console.warn('[ChatPage] socket off error', e && (e.message || e));
       }
     };
-  }, [socketRef, addOnline, removeOnline, addTypingUser, loadedConvId, setConversations]);
+  }, [socketRef, addOnline, removeOnline, addTypingUser, loadedConvId, setConversations, currentUserId, activeConvId, draftConversation]);
 
   useEffect(() => {
     const onOffline = () => {
@@ -256,7 +352,11 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     };
     const onOnline = () => {
       setIsNetworkOnline(true);
-      try { socketRef?.current?.connect?.(); } catch (e) { console.warn('[ChatPage] connect attempt failed', e && e.message); }
+      try {
+        socketRef?.current?.connect();
+      } catch (e) {
+        console.warn('[ChatPage] connect attempt failed', e && e.message);
+      }
     };
 
     window.addEventListener('offline', onOffline);
@@ -296,10 +396,8 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 
   useEffect(() => {
     fillParticipantNames(conversations);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversations]);
 
-  // helper to robustly extract last message id (avoids mixing || and ??)
   const getLastMessageId = (c) => {
     if (!c) return null;
     const lm = c.lastMessage ?? c.lastMessageContent ?? null;
@@ -327,6 +425,16 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         const el = document.getElementById('messages-wrap');
         if (el) el.scrollTop = el.scrollHeight;
       }, 50);
+
+      if (socketRef?.current && socketRef.current.connected && msgs.length > 0) {
+        const last = msgs[msgs.length - 1];
+        const lastId = String(last._id ?? last.id ?? '');
+        if (lastId) {
+          try {
+            socketRef.current.emit('messages_received', { conversationId: convId, upToMessageId: lastId });
+          } catch (e) {}
+        }
+      }
     } catch (e) {
       console.error('[ChatPage] Failed to load messages', e && (e.message || e));
       alert('Failed to load messages');
@@ -347,8 +455,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       if (!otherId) return;
       if (s && s.connected) {
         s.emit('send_message', { participantIds: [otherId], content, messageType: 'text' });
-        setDraftConversation(null);
-        setConversations((prev) => removeDraftForUser(prev, otherId));
         return;
       }
       try {
@@ -432,7 +538,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       setConversations((prev) => removeAllDraftsFromList(prev));
       setActiveConvId(payload._id);
       setDraftConversation(null);
-      loadMessages(payload._1d ?? payload._id ?? payload.id ?? payload);
+      loadMessages(payload._id ?? payload.id ?? payload);
     }
   };
 
@@ -475,7 +581,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
   const socketConnected = !!(socketRef && socketRef.current && socketRef.current.connected);
   const showConnecting = !isNetworkOnline || !socketConnected;
 
-  // Context menu handlers for conversation list (unchanged)
   const openContextMenu = (e, conv) => {
     e.preventDefault();
     setCtxTargetConv(conv);
@@ -516,7 +621,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
   const handleDeleteConversation = async () => {
     const conv = ctxTargetConv;
     if (!conv) return;
-    const convId = conv._1d ?? conv._id ?? conv.id ?? '';
+    const convId = conv._id ?? conv.id ?? '';
     if (String(convId).startsWith('draft:')) {
       const otherUserId = String(convId).replace(/^draft:/, '');
       setConversations((prev) => removeDraftForUser(prev, otherUserId));
@@ -542,7 +647,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     }
   };
 
-  // delete a single message (called by MessageList)
   const handleDeleteMessage = async (messageId, messageObj) => {
     if (!messageId) return;
     if (!loadedConvId) {
@@ -580,23 +684,18 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     }
   };
 
-  // EDIT message (called by MessageList)
   const handleEditMessage = async (messageId, newContent) => {
     if (!messageId) return { ok: false, error: 'no id' };
     if (newContent === null || newContent === undefined) return { ok: false, error: 'content required' };
     const normalizedNew = String(newContent);
 
-    // find original message in current messages state
     const origMsg = (messages || []).find((m) => String(m._id ?? m.id ?? '') === String(messageId));
     const origContent = origMsg ? String(origMsg.content ?? '') : null;
 
-    // If we know the original content and it is identical to the new content => nothing to do.
     if (origContent !== null && String(origContent) === normalizedNew) {
-      // do not call backend, do not set isEdited, but return success so the edit UI closes.
       return { ok: true, edited: false };
     }
 
-    // If this is a draft conversation (not yet persisted): update local state only when changed.
     if (!loadedConvId) {
       setMessages((prev) => (prev || []).map((m) => {
         if (String(m._id ?? m.id ?? '') === String(messageId)) {
@@ -607,7 +706,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       return { ok: true };
     }
 
-    // persisted conversation: call backend only if content changed
     try {
       const res = await axios.patch(
         `http://localhost:3000/messages/${encodeURIComponent(messageId)}`,
@@ -615,7 +713,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      // Assume success (2xx). Update local messages to reflect the new content and isEdited flag.
       setMessages((prev) => (prev || []).map((m) => {
         if (String(m._id ?? m.id ?? '') === String(messageId)) {
           return { ...m, content: normalizedNew, isEdited: true, updatedAt: new Date().toISOString() };
@@ -623,7 +720,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         return m;
       }));
 
-      // If edited message is the conversation lastMessage, update it there too
       setConversations((prev) => (prev || []).map((c) => {
         if (String(c._id ?? c.id ?? '') === String(loadedConvId)) {
           const lm = c.lastMessage ?? null;
