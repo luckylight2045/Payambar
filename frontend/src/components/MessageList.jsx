@@ -1,9 +1,23 @@
-/* eslint-disable no-empty */
-/* eslint-disable no-unused-vars */
 // src/components/MessageList.jsx
+/* eslint-disable no-unused-vars */
 import React, { useEffect, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
 
+/**
+ * MessageList
+ * - groups messages by day
+ * - shows time as HH:MM
+ * - animates newly arrived messages with a small slide/fade animation
+ * - supports right-click context menu per-message with "Edit" and "Delete"
+ *
+ * Props:
+ *  - messages: array of message objects (expected chronological ascending)
+ *  - currentUserId: string
+ *  - participantNameMap: { userId -> displayName }
+ *  - currentUserName: optional
+ *  - onDeleteMessage(messageId, messageObj) => Promise (provided by parent)
+ *  - onEditMessage(messageId, newContent) => Promise<{ok:true}|{ok:false,error}>
+ */
 export default function MessageList({
   messages = [],
   currentUserId,
@@ -15,16 +29,21 @@ export default function MessageList({
   const seenKeysRef = useRef(new Set());
   const [newKeys, setNewKeys] = useState(new Set());
 
+  // context menu state for messages
   const [ctxVisible, setCtxVisible] = useState(false);
   const [ctxX, setCtxX] = useState(0);
   const [ctxY, setCtxY] = useState(0);
   const [ctxTargetMessage, setCtxTargetMessage] = useState(null);
+  const menuRef = useRef(null);
 
+  // confirm delete popup state
   const [confirmVisible, setConfirmVisible] = useState(false);
 
+  // editing state
   const [editingId, setEditingId] = useState(null);
   const [editValue, setEditValue] = useState('');
 
+  // compute deterministic key for a message
   const messageKey = (m, idx) => {
     if (!m) return `missing-${idx}`;
     return m._id ?? m.id ?? (m.createdAt ? `${m.createdAt}-${idx}` : `idx-${idx}`);
@@ -96,6 +115,7 @@ export default function MessageList({
     return currentUserId && String(currentUserId) === String(sender);
   };
 
+  // Group messages by day
   const groups = {};
   for (const m of messages) {
     const d = m.createdAt ? new Date(m.createdAt) : new Date();
@@ -126,54 +146,53 @@ export default function MessageList({
     }
   };
 
+  // Context menu helpers
   const openMessageContextMenu = (e, message) => {
     e.preventDefault();
-    const padding = 12;
-    const menuWidth = 220;
-    const menuHeight = 140;
+    // clamp menu into viewport so it doesn't overflow right/bottom edges
+    const winW = window.innerWidth || 1024;
+    const winH = window.innerHeight || 768;
+    const MENU_W = 240;
+    const MENU_H = 140;
     let x = e.clientX;
     let y = e.clientY;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    if (x + menuWidth + padding > vw) {
-      x = Math.max(padding, vw - menuWidth - padding);
-    }
-    if (y + menuHeight + padding > vh) {
-      y = Math.max(padding, vh - menuHeight - padding);
-    }
-
+    if (x + MENU_W > winW) x = Math.max(8, winW - MENU_W - 8);
+    if (y + MENU_H > winH) y = Math.max(8, winH - MENU_H - 8);
     setCtxTargetMessage(message);
     setCtxX(x);
     setCtxY(y);
     setConfirmVisible(false);
     setCtxVisible(true);
-
-    setTimeout(() => {
-      window.addEventListener('click', handleOutsideClick);
-    }, 0);
   };
 
   const closeMessageContextMenu = () => {
     setCtxVisible(false);
     setCtxTargetMessage(null);
     setConfirmVisible(false);
-    try {
-      window.removeEventListener('click', handleOutsideClick);
-    } catch {}
   };
 
-  const handleOutsideClick = (ev) => {
-    const ex = ctxX;
-    const ey = ctxY;
-    const menuRect = { left: ex, top: ey, right: ex + 240, bottom: ey + 200 };
-    const cx = ev.clientX;
-    const cy = ev.clientY;
-    if (cx >= menuRect.left && cx <= menuRect.right && cy >= menuRect.top && cy <= menuRect.bottom) {
-      return;
-    }
-    closeMessageContextMenu();
-  };
+  // close menu when clicking outside
+  useEffect(() => {
+    const onDocDown = (ev) => {
+      if (!ctxVisible) return;
+      const node = menuRef.current;
+      if (!node) {
+        closeMessageContextMenu();
+        return;
+      }
+      if (!node.contains(ev.target)) {
+        closeMessageContextMenu();
+      }
+    };
+    window.addEventListener('mousedown', onDocDown);
+    window.addEventListener('touchstart', onDocDown);
+    return () => {
+      window.removeEventListener('mousedown', onDocDown);
+      window.removeEventListener('touchstart', onDocDown);
+    };
+  }, [ctxVisible]);
 
+  // Delete flow
   const onRequestDelete = () => {
     setConfirmVisible(true);
   };
@@ -188,12 +207,14 @@ export default function MessageList({
       if (onDeleteMessage) {
         await onDeleteMessage(id, ctxTargetMessage);
       }
-    } catch (e) {}
-    finally {
+    } catch (e) {
+      // parent will alert on error
+    } finally {
       closeMessageContextMenu();
     }
   };
 
+  // Edit flow
   const onRequestEdit = () => {
     if (!ctxTargetMessage) return;
     const mine = isMessageMine(ctxTargetMessage.senderId);
@@ -248,6 +269,7 @@ export default function MessageList({
     }
   };
 
+  // small inline styles for the menu
   const menuStyle = {
     position: 'fixed',
     left: ctxX,
@@ -258,11 +280,12 @@ export default function MessageList({
     padding: 8,
     borderRadius: 8,
     zIndex: 9999,
-    minWidth: 160,
+    minWidth: 180,
     color: 'var(--text, #e6eef6)',
   };
   const menuItemStyle = { padding: '8px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 14 };
 
+  // confirm popup style (positioned near same coords)
   const confirmStyle = {
     position: 'fixed',
     left: ctxX,
@@ -275,6 +298,7 @@ export default function MessageList({
     boxShadow: '0 6px 20px rgba(0,0,0,0.6)',
   };
 
+  // Inline CSS for animation & ticks (telegram-like spacing)
   const styles = (
     <style>
       {`
@@ -297,53 +321,51 @@ export default function MessageList({
         resize: vertical;
         min-height:36px;
       }
-      .tick {
-        display:inline-flex;
+      .tick-row {
+        display:flex;
         align-items:center;
-        justify-content:center;
-        margin-left:8px;
-        opacity:0.9;
+        justify-content:flex-end;
+        gap:4px;
+        margin-top:6px;
+        font-size:12px;
+        color: #9aa8b8;
       }
-      .tick svg { width:16px; height:12px; vertical-align:middle; }
-      .tick.single svg path { stroke:#9aa8b8; }
-      .tick.double svg path { stroke:#2b6ef6; }
+      .tick-icon { width:18px; height:14px; display:inline-block; vertical-align:middle; }
+      .tick-blue { fill: #2b9cff; }
+      .tick-gray { fill: rgba(255,255,255,0.44); }
+      .edited-label { font-size: 11px; color: #9aa8b8; margin-left:6px; }
+      .double-ticks { display:inline-flex; align-items:center; }
+      .double-ticks .tick-second { margin-left:-8px; } /* slight overlap like Telegram */
       `}
     </style>
   );
 
-  const tickNodeFor = (m) => {
-    const mine = isMessageMine(m.senderId);
-    if (!mine) return null;
-    const isRead = !!(m.isRead || m.readAt);
-    const isDelivered = !!(m.deliveredAt || m.deliveredTo || m.isDelivered);
-    if (isRead) {
-      return (
-        <span className="tick double" title={`Read ${m.readAt ? new Date(m.readAt).toLocaleString() : ''}`}>
-          <svg viewBox="0 0 22 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M1 8l5 5 14-14" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M1 11l5 5 14-14" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.95" />
-          </svg>
-        </span>
-      );
-    }
-    if (isDelivered) {
-      return (
-        <span className="tick single" title={`Delivered ${m.deliveredAt ? new Date(m.deliveredAt).toLocaleString() : ''}`}>
-          <svg viewBox="0 0 12 10" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M1 5l3 3 7-7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </span>
-      );
-    }
-    // If neither delivered nor read, show a small hollow circle indicating "sent" (or nothing)
-    return (
-      <span className="tick single" title="Sent">
-        <svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="5" cy="5" r="3" strokeWidth="1.2" fill="none" />
-        </svg>
-      </span>
-    );
+  // helper to check whether the other user has delivered / read this message
+  const getDeliveryStateForMessage = (m) => {
+    if (!m) return { delivered: false, read: false, sent: false };
+    const deliveredArr = Array.isArray(m.deliveredTo) ? m.deliveredTo.map(String) : [];
+    const delivered = deliveredArr.length > 0;
+    const read = !!(m.isRead || m.readAt);
+    const sent = !!m;
+    return { delivered, read, sent };
   };
+
+  // single tick SVG
+  const SingleTickSvg = ({ className }) => (
+    <svg className="tick-icon" viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+      <path className={className} d="M2.2 6.8L5.6 10.2 13.8 2.1 12.4 0.7 5.6 7.5 3 4.9 2.2 6.8z" />
+    </svg>
+  );
+
+  // double tick composed of two single ticks with slight overlap to mimic Telegram
+  const DoubleTicks = ({ colorClass }) => (
+    <span className="double-ticks" aria-hidden>
+      <SingleTickSvg className={colorClass + ' tick-first'} />
+      <span className="tick-second" style={{ display: 'inline-block' }}>
+        <SingleTickSvg className={colorClass} />
+      </span>
+    </span>
+  );
 
   return (
     <div className="message-list" style={{ padding: 8 }}>
@@ -369,6 +391,10 @@ export default function MessageList({
             const isNew = newKeys.has(key);
             const messageId = m._id ?? m.id ?? key;
 
+            // show edited label if backend uses isEdited OR local flag 'edited' set by frontend
+            const wasEdited = !!(m.isEdited || m.edited);
+
+            // If this message is being edited, render the edit input
             if (String(editingId) === String(messageId)) {
               return (
                 <div key={key} style={{ marginBottom: 8, display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
@@ -395,7 +421,7 @@ export default function MessageList({
               );
             }
 
-            const wasEdited = !!(m.isEdited || m.edited);
+            const { delivered, read } = getDeliveryStateForMessage(m);
 
             return (
               <div
@@ -420,20 +446,28 @@ export default function MessageList({
                     wordBreak: 'break-word',
                     boxShadow: isNew ? '0 10px 30px rgba(0,0,0,0.12)' : undefined,
                     whiteSpace: 'pre-wrap',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
                   }}
                 >
-                  <div style={{ flex: 1 }}>{m.content}</div>
-                  <div style={{ flexShrink: 0 }}>
-                    {tickNodeFor(m)}
-                  </div>
+                  <div>{m.content}</div>
+
+                  {wasEdited ? (
+                    <div style={{ marginTop: 6, display: 'flex', justifyContent: 'flex-end' }}>
+                      <span className="edited-label">Edited</span>
+                    </div>
+                  ) : null}
                 </div>
 
-                {wasEdited ? (
-                  <div style={{ fontSize: 11, color: '#9aa8b8', marginTop: 6, marginLeft: 6 }}>
-                    Edited
+                {mine ? (
+                  <div style={{ width: '70%', display: 'flex', justifyContent: 'flex-end' }}>
+                    <div className="tick-row" aria-hidden>
+                      {read ? (
+                        <DoubleTicks colorClass="tick-blue" />
+                      ) : delivered ? (
+                        <DoubleTicks colorClass="tick-gray" />
+                      ) : (
+                        <SingleTickSvg className="tick-gray" />
+                      )}
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -442,8 +476,9 @@ export default function MessageList({
         </div>
       ))}
 
+      {/* Message context menu */}
       {ctxVisible && ctxTargetMessage ? (
-        <div style={menuStyle} role="menu" aria-hidden={!ctxVisible}>
+        <div style={menuStyle} role="menu" aria-hidden={!ctxVisible} ref={menuRef}>
           {isMessageMine(ctxTargetMessage.senderId) ? (
             <>
               <div style={menuItemStyle} onClick={() => onRequestEdit()}>✏️ Edit message</div>
@@ -460,6 +495,7 @@ export default function MessageList({
         </div>
       ) : null}
 
+      {/* Confirm delete popup (two-step) */}
       {confirmVisible && ctxTargetMessage ? (
         <div style={confirmStyle}>
           <div style={{ marginBottom: 8 }}>Are you sure you want to delete this message?</div>

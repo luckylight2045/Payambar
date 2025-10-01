@@ -146,12 +146,10 @@ export class MessageService {
       const res = await this.message
         .updateMany(
           { _id: { $in: oids } },
+          { deliveredAt: new Date(), readAt: new Date(), isRead: true },
           {
             $addToSet: {
               deliveredTo: recipientId,
-              deliveredAt: new Date(),
-              readAt: new Date(),
-              isRead: true,
             },
           },
         )
@@ -182,11 +180,11 @@ export class MessageService {
       };
 
       const res = await this.message.updateMany(query, {
+        isRead: true,
+        readAt: new Date(),
+        deliveredAt: new Date(),
         $addToSet: {
           deliveredTo: recipientId,
-          isRead: true,
-          readAt: new Date(),
-          deliveredAt: new Date(),
         },
       });
 

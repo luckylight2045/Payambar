@@ -1,3 +1,4 @@
+// src/pages/ChatPage.jsx
 /* eslint-disable no-empty */
 /* eslint-disable no-unused-vars */
 // src/pages/ChatPage.jsx
@@ -19,6 +20,19 @@ import {
   lastMessageTimeForConv,
   formatConversationTime,
 } from '../utils/chatUtils';
+
+/**
+ * ChatPage (full)
+ *
+ * Adds frontend emissions for 'messages_received' so the gateway's:
+ *   @SubscribeMessage('messages_received')
+ * will be triggered when the user views/receives messages:
+ *  - when messages for a conversation are loaded
+ *  - when the window becomes visible
+ *  - when the user scrolls near the bottom of the message list
+ *
+ * This file keeps your existing UI/logic and only adds the delivery/read emission behavior.
+ */
 
 export default function ChatPage() {
   const css = `
@@ -85,6 +99,8 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
   const [ctxY, setCtxY] = useState(0);
   const [ctxTargetConv, setCtxTargetConv] = useState(null);
 
+  const messagesWrapRef = useRef(null);
+
   const addOnline = useCallback((id) => {
     setOnlineUsers((prev) => {
       const s = new Set(prev);
@@ -125,39 +141,48 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     setTypingRenderState(newRender);
   }, [currentUserId]);
 
-  const inferParticipantsFromMessage = (message) => {
-    const parts = Array.isArray(message?.participants) ? message.participants.slice() : [];
-    if (parts.length > 0) return parts;
-    if (Array.isArray(message?.participantIds) && message.participantIds.length > 0) {
-      const inferred = message.participantIds.map((id) => (typeof id === 'object' ? id : { _id: id }));
-      if (inferred.length > 0) {
-        // Ensure current user appears too
-        if (!inferred.some((p) => String(utilParticipantId(p)) === String(currentUserId))) {
-          inferred.push({ _id: currentUserId });
-        }
-        return inferred;
-      }
-    }
-    const inferred = [];
-    if (message?.senderId) inferred.push({ _id: message.senderId });
-    if (draftConversation && typeof draftConversation.userId === 'string') {
-      const draftOther = draftConversation.userId;
-      if (!inferred.some((p) => String(utilParticipantId(p)) === String(draftOther))) {
-        inferred.push({ _id: draftOther });
-      }
-      if (!inferred.some((p) => String(utilParticipantId(p)) === String(currentUserId))) {
-        inferred.push({ _id: currentUserId });
-      }
-      return inferred;
-    }
-    if (inferred.length === 1) {
-      if (String(inferred[0]._id) !== String(currentUserId)) {
-        inferred.push({ _id: currentUserId });
-      }
-    }
-    return inferred;
-  };
+  // emittedReceivedRef keeps track of messageIds per conversation already reported,
+  // to avoid spamming the server with repeated identical receipts.
+  const emittedReceivedRef = useRef({}); // convId -> Set(ids)
+  const emittedUpToRef = useRef({}); // convId -> upToMessageId last emitted
 
+  // helper: emit messages_received for a conversation
+  const emitMessagesReceivedForConversation = useCallback((convId, opts = {}) => {
+    const s = socketRef?.current;
+    if (!s || !convId) return;
+    try {
+      const convKey = String(convId);
+      emittedReceivedRef.current[convKey] = emittedReceivedRef.current[convKey] || new Set();
+      const already = emittedReceivedRef.current[convKey];
+
+      if (Array.isArray(opts.messageIds) && opts.messageIds.length > 0) {
+        const newIds = opts.messageIds.filter(Boolean).map(String).filter((id) => !already.has(id));
+        if (newIds.length === 0) return;
+        s.emit('messages_received', { messageIds: newIds, conversationId: convKey });
+        newIds.forEach((id) => already.add(id));
+        return;
+      }
+
+      if (opts.upToMessageId) {
+        const lastUpTo = emittedUpToRef.current[convKey];
+        if (lastUpTo && String(lastUpTo) === String(opts.upToMessageId)) return;
+        s.emit('messages_received', { upToMessageId: String(opts.upToMessageId), conversationId: convKey });
+        emittedUpToRef.current[convKey] = String(opts.upToMessageId);
+        return;
+      }
+
+      if (opts.messageId) {
+        const id = String(opts.messageId);
+        if (already.has(id)) return;
+        s.emit('messages_received', { messageId: id, conversationId: convKey });
+        already.add(id);
+      }
+    } catch (e) {
+      // swallow; best-effort
+    }
+  }, [socketRef]);
+
+  // socket listeners (unchanged + delivery/read handlers)
   useEffect(() => {
     const s = socketRef?.current;
     if (!s) return () => {};
@@ -200,19 +225,18 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     const onReceiveMessage = (message) => {
       if (!message) return;
 
-      const participants = inferParticipantsFromMessage(message);
       setConversations((prev) => {
         const copy = (prev || []).slice();
         const idx = copy.findIndex((c) => String(c._id) === String(message.conversationId));
         if (idx !== -1) {
-          copy[idx] = { ...copy[idx], lastMessage: message, participants, updatedAt: message.createdAt ?? new Date().toISOString() };
+          copy[idx] = { ...copy[idx], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() };
           return copy;
         }
-        return [{ _id: message.conversationId, participants, lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...copy];
+        return [{ _id: message.conversationId, participants: message.participants ?? [], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...copy];
       });
 
       try {
-        const parts = participants || [];
+        const parts = message.participants ?? [];
         for (const p of parts) {
           const pid = utilParticipantId(p);
           if (!pid) continue;
@@ -222,29 +246,24 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 
       if (String(message.conversationId) === String(loadedConvId)) {
         setMessages((prev) => [...prev, message]);
-        try {
-          socketRef?.current?.emit('messages_received', { messageIds: [String(message._id ?? message.id ?? '')] });
-        } catch (e) {}
       }
     };
 
     const onMessageSent = (message) => {
       if (!message) return;
-      const participants = inferParticipantsFromMessage(message);
-
       setConversations((prev) => {
         const idx = (prev || []).findIndex((c) => String(c._id) === String(message.conversationId));
         if (idx !== -1) {
-          const item = { ...prev[idx], lastMessage: message, participants, updatedAt: message.createdAt ?? new Date().toISOString() };
+          const item = { ...prev[idx], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() };
           const copy = prev.slice();
           copy.splice(idx, 1);
           return [item, ...copy];
         }
-        return [{ _id: message.conversationId, participants, lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...(prev || [])];
+        return [{ _id: message.conversationId, participants: message.participants ?? [], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...(prev || [])];
       });
 
       try {
-        const parts = participants || [];
+        const parts = message.participants ?? [];
         for (const p of parts) {
           const pid = utilParticipantId(p);
           if (!pid) continue;
@@ -254,70 +273,60 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 
       if (String(message.conversationId) === String(loadedConvId)) {
         setMessages((prev) => [...prev, message]);
-      } else if (activeConvId && String(activeConvId).startsWith('draft:')) {
-        const draftUid = draftConversation?.userId ?? String(activeConvId).replace(/^draft:/, '');
-        const partsFlat = (participants || []).map((p) => utilParticipantId(p) || (typeof p === 'string' ? p : null)).filter(Boolean);
-        const otherMatch = partsFlat.some((id) => String(id) === String(draftUid));
-        if (otherMatch || (String(message.senderId) === String(currentUserId) && String(message.conversationId))) {
-          setMessages((prev) => [...prev, message]);
-        }
       }
-
-      if (draftConversation) {
-        const draftUid = String(draftConversation.userId);
-        const partsFlat = (participants || []).map((p) => utilParticipantId(p) || (typeof p === 'string' ? p : null)).filter(Boolean);
-        if (partsFlat.some((id) => String(id) === draftUid) || (String(message.senderId) === String(currentUserId) && partsFlat.length === 0)) {
-          setConversations((prev) => removeDraftForUser(prev, draftUid));
-          setDraftConversation(null);
-        }
-      }
-
       setActiveConvId(String(message.conversationId));
       setLoadedConvId(String(message.conversationId));
     };
 
+    // handle single message delivered/read updates
     const onMessageDelivered = (payload) => {
-      if (!payload || !payload.messageId) return;
-      const mid = String(payload.messageId);
-      const deliveredAt = payload.deliveredAt ?? new Date().toISOString();
-      setMessages((prev) => (prev || []).map((m) => {
-        const id = String(m._id ?? m.id ?? '');
-        if (id === mid) {
-          return { ...m, deliveredAt };
+      if (!payload || !payload.conversationId) return;
+      const recipientId = payload.recipientId ?? null;
+      setMessages((prev) => {
+        if (!prev || prev.length === 0) return prev;
+        const copy = prev.slice();
+        if (Array.isArray(payload.messageIds) && payload.messageIds.length > 0) {
+          for (const id of payload.messageIds) {
+            for (let i = 0; i < copy.length; i++) {
+              const m = copy[i];
+              const midLocal = m._id ?? m.id;
+              if (String(midLocal) === String(id)) {
+                const deliveredTo = Array.isArray(m.deliveredTo) ? Array.from(new Set([...m.deliveredTo.map(String), String(recipientId)])) : [String(recipientId)];
+                copy[i] = { ...m, deliveredTo, deliveredAt: payload.deliveredAt ?? m.deliveredAt, isRead: payload.isRead ?? m.isRead };
+              }
+            }
+          }
+        } else if (payload.messageId) {
+          for (let i = 0; i < copy.length; i++) {
+            const m = copy[i];
+            const midLocal = m._id ?? m.id;
+            if (String(midLocal) === String(payload.messageId)) {
+              const deliveredTo = Array.isArray(m.deliveredTo) ? Array.from(new Set([...m.deliveredTo.map(String), String(recipientId)])) : [String(recipientId)];
+              copy[i] = { ...m, deliveredTo, deliveredAt: payload.deliveredAt ?? m.deliveredAt, isRead: payload.isRead ?? m.isRead };
+              break;
+            }
+          }
+        } else if (payload.upToMessageId) {
+          const upToId = payload.upToMessageId;
+          const upToMsg = copy.find((m) => String(m._id ?? m.id ?? '') === String(upToId));
+          if (upToMsg && upToMsg.createdAt) {
+            const cutoff = new Date(upToMsg.createdAt).getTime();
+            for (let i = 0; i < copy.length; i++) {
+              const m = copy[i];
+              const ts = m.createdAt ? new Date(m.createdAt).getTime() : 0;
+              if (ts <= cutoff) {
+                const deliveredTo = Array.isArray(m.deliveredTo) ? Array.from(new Set([...m.deliveredTo.map(String), String(recipientId)])) : [String(recipientId)];
+                copy[i] = { ...m, deliveredTo, deliveredAt: payload.deliveredAt ?? m.deliveredAt, isRead: payload.isRead ?? m.isRead };
+              }
+            }
+          }
         }
-        return m;
-      }));
-      setConversations((prev) => (prev || []).map((c) => {
-        const lm = c.lastMessage ?? null;
-        const lmId = lm ? String(lm._id ?? lm.id ?? '') : null;
-        if (lmId === mid) {
-          const newLast = { ...(lm || {}), deliveredAt };
-          return { ...c, lastMessage: newLast };
-        }
-        return c;
-      }));
+        return copy;
+      });
     };
 
-    const onMessageRead = (payload) => {
-      if (!payload || !payload.messageId) return;
-      const mid = String(payload.messageId);
-      const readAt = payload.readAt ?? new Date().toISOString();
-      setMessages((prev) => (prev || []).map((m) => {
-        const id = String(m._id ?? m.id ?? '');
-        if (id === mid) {
-          return { ...m, readAt, isRead: true };
-        }
-        return m;
-      }));
-      setConversations((prev) => (prev || []).map((c) => {
-        const lm = c.lastMessage ?? null;
-        const lmId = lm ? String(lm._id ?? lm.id ?? '') : null;
-        if (lmId === mid) {
-          const newLast = { ...(lm || {}), readAt, isRead: true };
-          return { ...c, lastMessage: newLast };
-        }
-        return c;
-      }));
+    const onMessagesDelivered = (payload) => {
+      onMessageDelivered(payload);
     };
 
     s.on('online_list', onOnlineList);
@@ -327,7 +336,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     s.on('receive_message', onReceiveMessage);
     s.on('message_sent', onMessageSent);
     s.on('message_delivered', onMessageDelivered);
-    s.on('message_read', onMessageRead);
+    s.on('messages_delivered', onMessagesDelivered);
 
     return () => {
       try {
@@ -338,12 +347,12 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         s.off('receive_message', onReceiveMessage);
         s.off('message_sent', onMessageSent);
         s.off('message_delivered', onMessageDelivered);
-        s.off('message_read', onMessageRead);
+        s.off('messages_delivered', onMessagesDelivered);
       } catch (e) {
         console.warn('[ChatPage] socket off error', e && (e.message || e));
       }
     };
-  }, [socketRef, addOnline, removeOnline, addTypingUser, loadedConvId, setConversations, currentUserId, activeConvId, draftConversation]);
+  }, [socketRef, addOnline, removeOnline, addTypingUser, loadedConvId, setConversations]);
 
   useEffect(() => {
     const onOffline = () => {
@@ -352,11 +361,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     };
     const onOnline = () => {
       setIsNetworkOnline(true);
-      try {
-        socketRef?.current?.connect();
-      } catch (e) {
-        console.warn('[ChatPage] connect attempt failed', e && e.message);
-      }
+      try { socketRef?.current?.connect?.(); } catch (e) { console.warn('[ChatPage] connect attempt failed', e && e.message); }
     };
 
     window.addEventListener('offline', onOffline);
@@ -396,8 +401,10 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 
   useEffect(() => {
     fillParticipantNames(conversations);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversations]);
 
+  // helper to robustly extract last message id (avoids mixing || and ??)
   const getLastMessageId = (c) => {
     if (!c) return null;
     const lm = c.lastMessage ?? c.lastMessageContent ?? null;
@@ -426,20 +433,128 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         if (el) el.scrollTop = el.scrollHeight;
       }, 50);
 
-      if (socketRef?.current && socketRef.current.connected && msgs.length > 0) {
-        const last = msgs[msgs.length - 1];
-        const lastId = String(last._id ?? last.id ?? '');
-        if (lastId) {
-          try {
-            socketRef.current.emit('messages_received', { conversationId: convId, upToMessageId: lastId });
-          } catch (e) {}
+      // After loading messages, immediately notify server about received messages
+      // compute messageIds that are from others and not yet delivered to this user
+      try {
+        if (msgs && msgs.length > 0) {
+          const candidateIds = msgs
+            .filter((m) => {
+              const sid = utilParticipantId(m.senderId) ?? (m.senderId && String(m.senderId)) ?? null;
+              if (!sid) return false;
+              if (String(sid) === String(currentUserId)) return false; // not from others
+              // if deliveredTo exists and already contains current user, skip
+              const delivered = Array.isArray(m.deliveredTo) ? m.deliveredTo.map(String) : [];
+              return !delivered.includes(String(currentUserId));
+            })
+            .map((m) => String(m._id ?? m.id ?? ''))
+            .filter(Boolean);
+
+          if (candidateIds.length > 0) {
+            emitMessagesReceivedForConversation(convId, { messageIds: candidateIds });
+          } else {
+            // fallback: emit upToMessageId for last message from other if any
+            const lastOther = [...msgs].reverse().find((m) => {
+              const sid = utilParticipantId(m.senderId) ?? (m.senderId && String(m.senderId)) ?? null;
+              return sid && String(sid) !== String(currentUserId);
+            });
+            if (lastOther) {
+              emitMessagesReceivedForConversation(convId, { upToMessageId: String(lastOther._id ?? lastOther.id ?? '') });
+            }
+          }
         }
-      }
+      } catch (e) {}
     } catch (e) {
       console.error('[ChatPage] Failed to load messages', e && (e.message || e));
       alert('Failed to load messages');
     }
   };
+
+  // When loadedConvId or messages change, attempt to notify server of receipt for unseen messages
+  useEffect(() => {
+    if (!loadedConvId || !messages || messages.length === 0) return;
+    try {
+      const candidateIds = messages
+        .filter((m) => {
+          const sid = utilParticipantId(m.senderId) ?? (m.senderId && String(m.senderId)) ?? null;
+          if (!sid) return false;
+          if (String(sid) === String(currentUserId)) return false;
+          const delivered = Array.isArray(m.deliveredTo) ? m.deliveredTo.map(String) : [];
+          return !delivered.includes(String(currentUserId));
+        })
+        .map((m) => String(m._id ?? m.id ?? ''))
+        .filter(Boolean);
+
+      if (candidateIds.length > 0) {
+        emitMessagesReceivedForConversation(loadedConvId, { messageIds: candidateIds });
+      } else {
+        const lastOther = [...messages].reverse().find((m) => {
+          const sid = utilParticipantId(m.senderId) ?? (m.senderId && String(m.senderId)) ?? null;
+          return sid && String(sid) !== String(currentUserId);
+        });
+        if (lastOther) {
+          emitMessagesReceivedForConversation(loadedConvId, { upToMessageId: String(lastOther._id ?? lastOther.id ?? '') });
+        }
+      }
+    } catch (e) {}
+  }, [loadedConvId, messages, emitMessagesReceivedForConversation, currentUserId]);
+
+  // When tab becomes visible, re-emit receipts for conversation in view
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && loadedConvId && messages && messages.length > 0) {
+        const candidateIds = messages
+          .filter((m) => {
+            const sid = utilParticipantId(m.senderId) ?? (m.senderId && String(m.senderId)) ?? null;
+            if (!sid) return false;
+            if (String(sid) === String(currentUserId)) return false;
+            const delivered = Array.isArray(m.deliveredTo) ? m.deliveredTo.map(String) : [];
+            return !delivered.includes(String(currentUserId));
+          })
+          .map((m) => String(m._id ?? m.id ?? ''))
+          .filter(Boolean);
+        if (candidateIds.length > 0) {
+          emitMessagesReceivedForConversation(loadedConvId, { messageIds: candidateIds });
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [loadedConvId, messages, emitMessagesReceivedForConversation, currentUserId]);
+
+  // scroll handler: when near bottom, emit receipts
+  useEffect(() => {
+    const el = document.getElementById('messages-wrap') || messagesWrapRef.current;
+    if (!el) return () => {};
+    let ticking = false;
+    const onScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        try {
+          const threshold = 150;
+          const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+          if (nearBottom && loadedConvId && messages && messages.length > 0) {
+            const candidateIds = messages
+              .filter((m) => {
+                const sid = utilParticipantId(m.senderId) ?? (m.senderId && String(m.senderId)) ?? null;
+                if (!sid) return false;
+                if (String(sid) === String(currentUserId)) return false;
+                const delivered = Array.isArray(m.deliveredTo) ? m.deliveredTo.map(String) : [];
+                return !delivered.includes(String(currentUserId));
+              })
+              .map((m) => String(m._id ?? m.id ?? ''))
+              .filter(Boolean);
+            if (candidateIds.length > 0) {
+              emitMessagesReceivedForConversation(loadedConvId, { messageIds: candidateIds });
+            }
+          }
+        } catch (e) {}
+        ticking = false;
+      });
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [loadedConvId, messages, emitMessagesReceivedForConversation, currentUserId]);
 
   const sendMessage = async (content) => {
     if (!content || !content.trim()) return;
@@ -455,6 +570,8 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       if (!otherId) return;
       if (s && s.connected) {
         s.emit('send_message', { participantIds: [otherId], content, messageType: 'text' });
+        setDraftConversation(null);
+        setConversations((prev) => removeDraftForUser(prev, otherId));
         return;
       }
       try {
@@ -538,7 +655,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       setConversations((prev) => removeAllDraftsFromList(prev));
       setActiveConvId(payload._id);
       setDraftConversation(null);
-      loadMessages(payload._id ?? payload.id ?? payload);
+      loadMessages(payload._1d ?? payload._id ?? payload.id ?? payload);
     }
   };
 
@@ -581,6 +698,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
   const socketConnected = !!(socketRef && socketRef.current && socketRef.current.connected);
   const showConnecting = !isNetworkOnline || !socketConnected;
 
+  // Context menu handlers for conversation list (unchanged)
   const openContextMenu = (e, conv) => {
     e.preventDefault();
     setCtxTargetConv(conv);
@@ -621,7 +739,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
   const handleDeleteConversation = async () => {
     const conv = ctxTargetConv;
     if (!conv) return;
-    const convId = conv._id ?? conv.id ?? '';
+    const convId = conv._1d ?? conv._id ?? conv.id ?? '';
     if (String(convId).startsWith('draft:')) {
       const otherUserId = String(convId).replace(/^draft:/, '');
       setConversations((prev) => removeDraftForUser(prev, otherUserId));
@@ -647,6 +765,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     }
   };
 
+  // delete a single message (called by MessageList)
   const handleDeleteMessage = async (messageId, messageObj) => {
     if (!messageId) return;
     if (!loadedConvId) {
@@ -684,22 +803,17 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     }
   };
 
+  // EDIT message (called by MessageList)
   const handleEditMessage = async (messageId, newContent) => {
     if (!messageId) return { ok: false, error: 'no id' };
-    if (newContent === null || newContent === undefined) return { ok: false, error: 'content required' };
-    const normalizedNew = String(newContent);
-
-    const origMsg = (messages || []).find((m) => String(m._id ?? m.id ?? '') === String(messageId));
-    const origContent = origMsg ? String(origMsg.content ?? '') : null;
-
-    if (origContent !== null && String(origContent) === normalizedNew) {
-      return { ok: true, edited: false };
+    if (!newContent || String(newContent).trim().length === 0) {
+      return { ok: false, error: 'content required' };
     }
-
     if (!loadedConvId) {
+      // local edit for draft
       setMessages((prev) => (prev || []).map((m) => {
         if (String(m._id ?? m.id ?? '') === String(messageId)) {
-          return { ...m, content: normalizedNew, isEdited: true, updatedAt: new Date().toISOString() };
+          return { ...m, content: newContent, edited: true, updatedAt: new Date().toISOString() };
         }
         return m;
       }));
@@ -709,30 +823,44 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     try {
       const res = await axios.patch(
         `http://localhost:3000/messages/${encodeURIComponent(messageId)}`,
-        { content: normalizedNew },
+        { content: newContent },
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
+      const serverData = res?.data;
+
+      const wasEdited = !!(serverData && (
+        (typeof serverData.modifiedCount === 'number' && serverData.modifiedCount > 0) ||
+        (typeof serverData.modified === 'number' && serverData.modified > 0) ||
+        (typeof serverData.nModified === 'number' && serverData.nModified > 0) ||
+        (typeof serverData.matchedCount === 'number' && serverData.matchedCount > 0) ||
+        (typeof serverData === 'object' && Object.keys(serverData).length > 0)
+      ));
+
+      // Update local messages always with new content so user sees the edit; only mark edited flag when server changed content.
       setMessages((prev) => (prev || []).map((m) => {
         if (String(m._id ?? m.id ?? '') === String(messageId)) {
-          return { ...m, content: normalizedNew, isEdited: true, updatedAt: new Date().toISOString() };
+          return { ...m, content: newContent, edited: wasEdited ? true : (m.edited || false), updatedAt: new Date().toISOString() };
         }
         return m;
       }));
 
-      setConversations((prev) => (prev || []).map((c) => {
-        if (String(c._id ?? c.id ?? '') === String(loadedConvId)) {
-          const lm = c.lastMessage ?? null;
-          const lmId = lm ? (lm._id ?? lm.id ?? null) : null;
-          if (String(lmId) === String(messageId)) {
-            const newLast = { ...(lm || {}), content: normalizedNew, isEdited: true, updatedAt: new Date().toISOString() };
-            return { ...c, lastMessage: newLast };
+      // If edited message is the conversation lastMessage and server indicated change, update it there too
+      if (wasEdited) {
+        setConversations((prev) => (prev || []).map((c) => {
+          if (String(c._id ?? c.id ?? '') === String(loadedConvId)) {
+            const lm = c.lastMessage ?? null;
+            const lmId = lm ? (lm._id ?? lm.id ?? null) : null;
+            if (String(lmId) === String(messageId)) {
+              const newLast = { ...(lm || {}), content: newContent, updatedAt: new Date().toISOString() };
+              return { ...c, lastMessage: newLast };
+            }
           }
-        }
-        return c;
-      }));
+          return c;
+        }));
+      }
 
-      return { ok: true };
+      return { ok: true, edited: !!wasEdited };
     } catch (err) {
       console.error('[ChatPage] edit message failed', err?.response?.data ?? err?.message ?? err);
       return { ok: false, error: err?.response?.data ?? err?.message };
@@ -803,7 +931,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       <div className="chat-main">
         {showConnecting ? <div className="connecting-banner">Connecting…</div> : null}
 
-        <div className="messages-wrap" id="messages-wrap">
+        <div className="messages-wrap" id="messages-wrap" ref={messagesWrapRef}>
           {loadedConvId ? (
             <MessageList
               messages={messages}

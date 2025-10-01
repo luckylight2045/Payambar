@@ -21,6 +21,7 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import { JwtPayload } from 'src/auth/interfaces/jwt.payload';
 import { UserService } from 'src/user/user.service';
 import { MessageService } from 'src/message/message.service';
+import { ConversationService } from 'src/conversation/conversation.service';
 
 type AuthSocket = Socket<any, any, any, { userId?: string }>;
 
@@ -37,6 +38,7 @@ export class ChatGateway
     private readonly jwtService: JwtService,
     private readonly userService: UserService,
     private readonly messageService: MessageService,
+    private readonly conversationService: ConversationService,
     @InjectRedis() private readonly ioredis: Redis,
   ) {}
 
@@ -326,147 +328,98 @@ export class ChatGateway
     data: {
       messageIds?: string[];
       messageId?: string;
-      conversationId?: string;
+      conversationId: string;
       upToMessageId?: string;
     },
     @ConnectedSocket() client: AuthSocket,
   ) {
-    const recipientId = client?.data?.userId;
-    if (typeof recipientId !== 'string') {
+    console.log('message is delivered');
+    const senderSocketId = client.id;
+    let recipientId: string | null = null;
+    if (client?.data && typeof client.data.userId === 'string') {
+      recipientId = String(client.data.userId);
+    } else if (senderSocketId) {
+      const maybe = await this.ioredis
+        .get(`socket:${senderSocketId}`)
+        .catch(() => null);
+      if (typeof maybe === 'string' && maybe.length > 0) recipientId = maybe;
+    }
+
+    if (!recipientId) {
       client.emit('error', 'Unauthenticated');
       return;
     }
 
+    if (!data || typeof data.conversationId !== 'string') {
+      client.emit('error', 'conversationId required');
+      return;
+    }
+
+    const conv = await this.conversationService.getConversationById(
+      data.conversationId,
+    );
+    if (!conv) {
+      client.emit('error', 'conversation not found');
+      return;
+    }
+
     try {
-      let idsToProcess: string[] = [];
-
-      if (Array.isArray(data?.messageIds) && data.messageIds.length > 0) {
-        idsToProcess = data.messageIds.filter(Boolean).map(String);
-      } else if (data?.messageId) {
-        idsToProcess = [String(data.messageId)];
-      } else if (data?.conversationId && data?.upToMessageId) {
-        const upToMsg = await this.messageService.getMessageById(
-          String(data.upToMessageId),
-        );
-        if (!upToMsg || !upToMsg.createdAt) {
-          client.emit('messages_received_ack', {
-            ok: true,
-            processed: 0,
-            results: [],
-          });
-          return;
-        }
-        const beforeDate = new Date(new Date(upToMsg.createdAt).getTime() + 1);
-        const msgs = await this.messageService.getMessagesForConversation(
-          String(data.conversationId),
-          {
-            limit: 1000,
-            beforeDate,
-          },
-        );
-        const msgsAny = Array.isArray(msgs) ? (msgs as any[]) : [];
-        idsToProcess = msgsAny
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-          .map((m: any) => String(m._id ?? m.id ?? ''))
-          .filter(Boolean);
-      } else {
-        client.emit('messages_received_ack', {
-          ok: false,
-          reason: 'no_ids_provided',
+      if (Array.isArray(data.messageIds) && data.messageIds.length > 0) {
+        await this.messageService.markAsDelivered({
+          recipientId,
+          messageIds: data.messageIds.map((id) => String(id)),
+          conversationId: data.conversationId,
         });
-        return;
-      }
-
-      if (idsToProcess.length === 0) {
-        client.emit('messages_received_ack', {
-          ok: true,
-          processed: 0,
-          results: [],
-        });
-        return;
-      }
-
-      await this.messageService.markAsDelivered({
-        recipientId: recipientId,
-        messageIds: idsToProcess,
-        conversationId: data?.conversationId ?? '',
-      });
-
-      const fetched = await Promise.all(
-        idsToProcess.map((id) =>
-          this.messageService.getMessageById(String(id)),
-        ),
-      );
-
-      const results: Array<{
-        messageId: string;
-        ok: boolean;
-        reason?: string;
-        deliveredAt?: string;
-      }> = [];
-      const seen = new Set<string>();
-
-      for (const m of fetched) {
-        if (!m) continue;
-        const mid = String(m._id ?? m.id ?? '');
-        if (!mid || seen.has(mid)) continue;
-        seen.add(mid);
-        const senderRaw = m.senderId;
-        let senderId: string | null = null;
-        if (senderRaw && typeof senderRaw === 'object') {
-          senderId = String(senderRaw._id ?? senderRaw.id ?? senderRaw);
-        } else if (senderRaw) {
-          senderId = String(senderRaw);
-        }
-        const deliveredAtIso = m.deliveredAt
-          ? new Date(m.deliveredAt).toISOString()
-          : new Date().toISOString();
-        if (senderId && senderId !== String(recipientId)) {
-          try {
-            await this.notifyUser(
-              senderId,
-              'message_delivered',
-              {
-                messageId: mid,
-                recipientId,
-                deliveredAt: deliveredAtIso,
-              },
-              undefined,
-            );
-            results.push({
-              messageId: mid,
-              ok: true,
-              deliveredAt: deliveredAtIso,
-            });
-          } catch (err) {
-            results.push({
-              messageId: mid,
-              ok: false,
-              reason: (err as Error).message,
-            });
-          }
-        } else {
-          results.push({
+        const deliveredAt = new Date().toISOString();
+        for (const mid of data.messageIds) {
+          this.server.to(data.conversationId).emit('message_delivered', {
             messageId: mid,
-            ok: false,
-            reason: 'no_sender_or_self',
+            conversationId: data.conversationId,
+            recipientId,
+            deliveredAt,
           });
         }
+        return { ok: true };
       }
 
-      client.emit('messages_received_ack', {
-        ok: true,
-        processed: results.length,
-        results,
-      });
+      if (typeof data.messageId === 'string' && data.messageId) {
+        await this.messageService.markAsDelivered({
+          recipientId,
+          messageId: data.messageId,
+          conversationId: data.conversationId,
+        });
+        const deliveredAt = new Date().toISOString();
+        this.server.to(data.conversationId).emit('message_delivered', {
+          messageId: data.messageId,
+          conversationId: data.conversationId,
+          recipientId,
+          deliveredAt,
+        });
+        return { ok: true };
+      }
+
+      if (typeof data.upToMessageId === 'string' && data.upToMessageId) {
+        const res = await this.messageService.markAsDelivered({
+          recipientId,
+          conversationId: data.conversationId,
+          upToMessageId: data.upToMessageId,
+        });
+        const deliveredAt = new Date().toISOString();
+        this.server.to(data.conversationId).emit('messages_delivered', {
+          conversationId: data.conversationId,
+          upToMessageId: data.upToMessageId,
+          recipientId,
+          deliveredAt,
+          matchedCount: res?.matchedCount ?? 0,
+          modifiedCount: res?.modifiedCount ?? 0,
+        });
+        return { ok: true };
+      }
+
+      client.emit('error', 'No messageId/messageIds or upToMessageId provided');
     } catch (err) {
-      this.logger.warn(
-        `handleMessagesReceived failed: ${(err as Error).message}`,
-      );
-      client.emit('messages_received_ack', {
-        ok: false,
-        error: (err as Error).message,
-      });
+      client.emit('error', String((err as Error).message ?? err));
+      throw err;
     }
   }
 
