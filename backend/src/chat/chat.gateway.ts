@@ -333,7 +333,6 @@ export class ChatGateway
     },
     @ConnectedSocket() client: AuthSocket,
   ) {
-    console.log('message is delivered');
     const senderSocketId = client.id;
     let recipientId: string | null = null;
     if (client?.data && typeof client.data.userId === 'string') {
@@ -422,7 +421,6 @@ export class ChatGateway
       throw err;
     }
   }
-
   @SubscribeMessage('send_message')
   async handleSendMessage(
     @MessageBody()
@@ -437,37 +435,141 @@ export class ChatGateway
       client.emit('error', 'Unauthenticated');
       return;
     }
-
     if (typeof data?.content !== 'string' || data.content.trim().length === 0) {
       client.emit('error', 'content required');
       return;
     }
-
-    try {
-      const saved = await this.chatService.createMessage({
-        conversationId: data.conversationId,
-        participantIds: data.participantIds,
-        senderId,
-        content: data.content,
-        messageType: data.messageType,
-      });
-
-      const convId = saved.conversationId.toString();
-
-      client.to(convId).emit('receive_message', saved);
-      client.emit('message_sent', saved);
-
-      const participants =
-        await this.chatService.getConversationParticipants(convId);
-      for (const pid of participants) {
-        if (pid === senderId) continue;
-        await this.notifyUser(pid, 'receive_message', saved, convId);
-      }
-    } catch (err) {
-      this.logger.warn(
-        `Failed to send message from ${senderId}: ${(err as Error).message}`,
+    let recipientIds: string[] = [];
+    let origParticipantIds: string[] | null = null;
+    if (Array.isArray(data.participantIds) && data.participantIds.length > 0) {
+      origParticipantIds = data.participantIds.map(String);
+      recipientIds = origParticipantIds.filter((id) => id !== String(senderId));
+    } else if (typeof data.conversationId === 'string' && data.conversationId) {
+      const participants = await this.chatService.getConversationParticipants(
+        data.conversationId,
       );
-      client.emit('error', (err as Error).message || 'send failed');
+      recipientIds = (participants || [])
+        .map(String)
+        .filter((id) => id !== String(senderId));
+    } else {
+      client.emit('error', 'No recipient(s) specified');
+      return;
+    }
+    const blockedRecipients: string[] = [];
+    const allowedRecipients: string[] = [];
+    if (recipientIds.length > 0) {
+      let usedRedis = true;
+      try {
+        const pipe = this.ioredis.pipeline();
+        for (const rid of recipientIds) {
+          pipe.sismember(`blocked:${rid}`, String(senderId));
+          pipe.sismember(`blocked:${senderId}`, String(rid));
+        }
+        const results = await pipe.exec();
+        if (!results) usedRedis = false;
+        else {
+          for (let i = 0; i < recipientIds.length; i++) {
+            const a = results[i * 2];
+            const b = results[i * 2 + 1];
+            if (!a || !b) {
+              usedRedis = false;
+              break;
+            }
+            const aErr = a[0];
+            const aVal = a[1];
+            const bErr = b[0];
+            const bVal = b[1];
+            if (aErr || bErr) {
+              usedRedis = false;
+              break;
+            }
+            const recipientBlockedSender = aVal === 1;
+            const senderBlockedRecipient = bVal === 1;
+            if (recipientBlockedSender || senderBlockedRecipient)
+              blockedRecipients.push(recipientIds[i]);
+            else allowedRecipients.push(recipientIds[i]);
+          }
+        }
+      } catch (e) {
+        console.log(e);
+        usedRedis = false;
+      }
+      if (!usedRedis) {
+        blockedRecipients.length = 0;
+        allowedRecipients.length = 0;
+        for (const rid of recipientIds) {
+          const recipientBlockedSender = await this.userService.isBlockedBy(
+            rid,
+            senderId,
+          );
+          const senderBlockedRecipient = await this.userService.isBlockedBy(
+            senderId,
+            rid,
+          );
+          if (recipientBlockedSender || senderBlockedRecipient)
+            blockedRecipients.push(rid);
+          else allowedRecipients.push(rid);
+        }
+      }
+    }
+    if (recipientIds.length > 0 && allowedRecipients.length === 0) {
+      client.emit('error', 'All recipients blocked');
+      return;
+    }
+    if (blockedRecipients.length > 0) {
+      client.emit('error', 'Recipient blocked');
+      return;
+    }
+    type SavedMessageLike = {
+      conversationId?: string | { toString(): string };
+      conversation?: { _id?: string | { toString(): string } } | null;
+      _id?: string | { toString(): string };
+    } & Record<string, unknown>;
+    try {
+      let savedMessageRaw: unknown;
+      if (data.conversationId) {
+        savedMessageRaw = await this.chatService.createMessage({
+          messageType: data.messageType,
+          content: data.content,
+          senderId,
+          conversationId: data.conversationId,
+        });
+      } else {
+        const participantIdsToCreate =
+          origParticipantIds && origParticipantIds.length > 0
+            ? origParticipantIds.map(String)
+            : [String(senderId)];
+        savedMessageRaw = await this.chatService.createMessage({
+          messageType: data.messageType,
+          content: data.content,
+          senderId,
+          participantIds: participantIdsToCreate,
+        });
+      }
+      const savedMessage = savedMessageRaw as SavedMessageLike;
+      let convField: string | { toString(): string } | undefined;
+      if (savedMessage.conversationId) convField = savedMessage.conversationId;
+      else if (savedMessage.conversation && savedMessage.conversation._id)
+        convField = savedMessage.conversation._id;
+      else if (savedMessage._id) convField = savedMessage._id;
+      const convId = String(
+        typeof convField === 'object'
+          ? convField.toString()
+          : (convField ?? ''),
+      );
+      if (convId) {
+        this.server.to(convId).emit('message_sent', savedMessage);
+        this.server.emit('message_event', {
+          conversationId: convId,
+          message: savedMessage,
+        });
+      } else {
+        client.emit('error', 'Failed to determine conversation id');
+      }
+      return savedMessageRaw;
+    } catch (err) {
+      client.emit('error', 'Failed to send message ' + err);
+      return;
     }
   }
 

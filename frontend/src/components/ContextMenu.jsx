@@ -1,4 +1,3 @@
-// src/components/ContextMenu.jsx
 import React, { useEffect, useRef } from 'react';
 
 /**
@@ -9,9 +8,11 @@ import React, { useEffect, useRef } from 'react';
  *  - onClose() => void
  *  - onClearHistory() => Promise
  *  - onDeleteConversation() => Promise
+ *  - onBlockUser(otherUserId) => Promise
+ *  - blockState: { blockedByMe?: bool, blockedByThem?: bool } optional
  *  - isDraft (bool)
  *
- * Simple, pretty context menu for right-click actions on conversations.
+ * Note: onBlockUser will be called with a single argument: otherUserId (string) or null (if not provided).
  */
 export default function ContextMenu({
   visible,
@@ -20,6 +21,9 @@ export default function ContextMenu({
   onClose = () => {},
   onClearHistory = () => {},
   onDeleteConversation = () => {},
+  onBlockUser = () => {},
+  blockState = {},
+  otherUserId = null,
   isDraft = false,
 }) {
   const ref = useRef(null);
@@ -67,6 +71,9 @@ export default function ContextMenu({
 
   const divider = { height: 1, background: 'rgba(255,255,255,0.02)', margin: '6px 0' };
 
+  const blockedByMe = !!blockState.blockedByMe;
+  const blockedByThem = !!blockState.blockedByThem;
+
   return (
     <div ref={ref} style={style} role="menu" aria-hidden={!visible}>
       <div
@@ -96,6 +103,39 @@ export default function ContextMenu({
       >
         🗑️ {isDraft ? 'Remove draft' : 'Delete conversation'}
       </div>
+
+      <div style={divider} />
+
+      {/* Block / Unblock action */}
+      <div
+        style={{
+          ...itemStyle,
+          color: blockedByMe ? '#ffb4b4' : 'var(--text)',
+          fontWeight: blockedByMe ? 700 : 600,
+        }}
+        onClick={async () => {
+          try {
+            if (!otherUserId) {
+              // nothing to block
+              return;
+            }
+            await onBlockUser(otherUserId, blockedByMe); // second arg indicates current state (so backend can toggle)
+          } finally {
+            onClose();
+          }
+        }}
+      >
+        {blockedByMe ? '🚫 Unblock user' : '🚫 Block user'}
+      </div>
+
+      {blockedByThem ? (
+        <>
+          <div style={divider} />
+          <div style={{ padding: '6px 10px', fontSize: 13, color: '#9aa8b8' }}>
+            ⚠️ This user has blocked you. You cannot send messages.
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

@@ -1,10 +1,33 @@
+/* eslint-disable no-empty */
 // src/components/ChatForm.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import useAuth from '../hooks/useAuth';
 
-export default function ChatForm({ onConversationStart, conversations = [] }) {
-  const { token } = useAuth();
+/**
+ * ChatForm
+ *
+ * Props:
+ *  - onConversationStart(payload)  // expected payload shapes:
+ *      string (conversationId)
+ *      { draft: true, userId, userName }
+ *      { saved: true, userId, userName }  <-- opens SavedMessages in ChatPage
+ *  - conversations = []            // list from useConversations
+ *  - currentUserId (optional)      // if not provided, fallback to useAuth()
+ *
+ * This component is intentionally conservative: it will try multiple checks
+ * to decide whether the clicked search result represents the current user,
+ * and will call onConversationStart({ saved: true, ... }) consistently.
+ */
+export default function ChatForm({
+  onConversationStart,
+  conversations = [],
+  currentUserId: propCurrentUserId = null,
+}) {
+  const { token, user } = useAuth();
+  const fallbackUserId = user?.id ?? user?._id ?? user?.__raw?._id ?? null;
+  const currentUserId = propCurrentUserId ?? fallbackUserId;
+
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
@@ -39,13 +62,21 @@ export default function ChatForm({ onConversationStart, conversations = [] }) {
       const mapped = data
         .filter(Boolean)
         .map((u) => {
-          const id = u._id || u.id || (u._id && u._id.toString && u._id.toString()) || null;
+          // normalize id & name
+          const id =
+            u._id ||
+            u.id ||
+            (u._id && typeof u._id.toString === 'function' && u._id.toString()) ||
+            null;
           const name = u.name || u.userName || u.username || id;
-          return { id, name, raw: u };
+          // allow backend to mark "self" explicitly (optional)
+          const isSelf = !!(u.isSelf || u.is_current_user || (id && currentUserId && String(id) === String(currentUserId)));
+          return { id, name, raw: u, isSelf };
         })
         .filter((x) => x.id);
       setResults(mapped);
     } catch (err) {
+      // eslint-disable-next-line no-console
       console.error('Search error', err);
       setError('Search failed');
     } finally {
@@ -58,10 +89,8 @@ export default function ChatForm({ onConversationStart, conversations = [] }) {
     if (!p) return null;
     if (typeof p === 'string') return String(p);
     if (typeof p === 'object') {
-      // mongoose populated doc or similar
       if (p._id) return String(p._id);
       if (p.id) return String(p.id);
-      // fallback if _id is an object with toString
       if (p._id && typeof p._id.toString === 'function') return p._id.toString();
       return null;
     }
@@ -69,10 +98,27 @@ export default function ChatForm({ onConversationStart, conversations = [] }) {
   };
 
   // Start or reuse private conversation without sending a message
-  const startConversationWith = async (userId, userName) => {
+  const startConversationWith = async (userId, userName, extra = {}) => {
     setLoading(true);
     setError(null);
     try {
+      // Determine if target is the current user using multiple heuristics:
+      const isExplicitSelf = !!extra.isSelf;
+      const idMatches = userId && currentUserId && String(userId) === String(currentUserId);
+      const nameMatches = userName && (userName === (user?.username ?? user?.userName ?? user?.name));
+
+      if (isExplicitSelf || idMatches || nameMatches) {
+        // Tell ChatPage to open saved messages. ChatPage expects payload { saved: true, userId, userName }.
+        // This is the crucial step to ensure the "saved messages" HTTP branch will be used on send.
+        try {
+          console.debug('[ChatForm] opening SavedMessages for self', { userId, userName });
+        } catch {}
+        onConversationStart && onConversationStart({ saved: true, userId, userName });
+        setQ('');
+        setResults([]);
+        return;
+      }
+
       // Check if it's already in our conversations (by participants)
       const exists = conversations.find((c) => {
         const parts = c.participants || [];
@@ -84,9 +130,13 @@ export default function ChatForm({ onConversationStart, conversations = [] }) {
 
       if (exists) {
         // normalize conv id
-        const convId = exists._id ?? exists.id ?? (exists._id && exists._id.toString && exists._id.toString()) ?? null;
+        const convId =
+          exists._id ??
+          exists.id ??
+          (exists._id && exists._id.toString && exists._id.toString()) ??
+          null;
         if (convId) {
-          onConversationStart(String(convId));
+          onConversationStart && onConversationStart(String(convId));
           setQ('');
           setResults([]);
           return;
@@ -95,10 +145,11 @@ export default function ChatForm({ onConversationStart, conversations = [] }) {
 
       // Otherwise: do NOT create backend conversation yet.
       // Inform parent to open a draft conversation (frontend-only).
-      onConversationStart({ draft: true, userId, userName });
+      onConversationStart && onConversationStart({ draft: true, userId, userName });
       setQ('');
       setResults([]);
     } catch (err) {
+      // eslint-disable-next-line no-console
       console.error('Failed to open conversation', err);
       setError('Failed to open conversation');
     } finally {
@@ -129,7 +180,7 @@ export default function ChatForm({ onConversationStart, conversations = [] }) {
             {results.map((r) => (
               <li
                 key={r.id}
-                onClick={() => startConversationWith(r.id, r.name)}
+                onClick={() => startConversationWith(r.id, r.name, { isSelf: r.isSelf })}
                 style={{
                   padding: '8px 10px',
                   borderRadius: 8,

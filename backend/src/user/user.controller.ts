@@ -23,6 +23,7 @@ import { CurrentUser } from 'src/decorators/current-user.decorator';
 import { UserLoginResponseSchema } from 'src/auth/response/user.login.response.schema';
 import { UserSignUpResponseSchema } from './response/user.signup.response.schema';
 import { UserUpdateResponseSchema } from './response/user.update.response.schema';
+import { HydratedDocument } from 'mongoose';
 @Controller('users')
 export class UserController {
   constructor(
@@ -93,5 +94,41 @@ export class UserController {
   @Get(':id')
   async getUserById(@Param('id') userId: string) {
     return this.userService.getUserById(userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('blocked/:id')
+  async blockUser(
+    @Param('id') blockedUserId: string,
+    @CurrentUser() user: HydratedDocument<User>,
+  ) {
+    return await this.userService.blockUser(user._id.toString(), blockedUserId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('block/:id')
+  async unblockUser(
+    @Param('id') blockedUserId: string,
+    @CurrentUser() user: HydratedDocument<User>,
+  ) {
+    return await this.userService.unblockUser(
+      user._id.toString(),
+      blockedUserId,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('blocked')
+  async listBlocked(@CurrentUser() user: HydratedDocument<User>) {
+    return await this.userService.getBlockedUsers(user._id.toString());
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('block/status/:id')
+  async blockedStatus(
+    @CurrentUser() user: HydratedDocument<User>,
+    @Param('id') otherUserId: string,
+  ) {
+    return await this.userService.blockStatus(user._id.toString(), otherUserId);
   }
 }

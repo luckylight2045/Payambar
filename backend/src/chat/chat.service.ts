@@ -67,20 +67,31 @@ export class ChatService {
       );
     }
 
+    console.log('life is great');
     const participants = [
       ...new Set([senderId, ...participantIds.map(String)]),
     ];
 
-    const existing =
-      await this.conversationService.findPrivateBetween(participants);
     let conv: ConversationDocument;
-    if (existing) {
-      conv = existing;
-    } else {
+    if (
+      participants.length === 1 &&
+      String(participants[0]) === String(senderId)
+    ) {
       conv = await this.conversationService.createConversation({
         type: ConversationType.PRIVATE,
         participants,
       });
+    } else {
+      const existing =
+        await this.conversationService.findPrivateBetween(participants);
+      if (existing) {
+        conv = existing;
+      } else {
+        conv = await this.conversationService.createConversation({
+          type: ConversationType.PRIVATE,
+          participants,
+        });
+      }
     }
 
     const savedMessage = await this.messageService.createMessage({

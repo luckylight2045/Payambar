@@ -1,4 +1,3 @@
-// src/pages/ChatPage.jsx
 /* eslint-disable no-empty */
 /* eslint-disable no-unused-vars */
 // src/pages/ChatPage.jsx
@@ -20,19 +19,6 @@ import {
   lastMessageTimeForConv,
   formatConversationTime,
 } from '../utils/chatUtils';
-
-/**
- * ChatPage (full)
- *
- * Adds frontend emissions for 'messages_received' so the gateway's:
- *   @SubscribeMessage('messages_received')
- * will be triggered when the user views/receives messages:
- *  - when messages for a conversation are loaded
- *  - when the window becomes visible
- *  - when the user scrolls near the bottom of the message list
- *
- * This file keeps your existing UI/logic and only adds the delivery/read emission behavior.
- */
 
 export default function ChatPage() {
   const css = `
@@ -141,12 +127,9 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     setTypingRenderState(newRender);
   }, [currentUserId]);
 
-  // emittedReceivedRef keeps track of messageIds per conversation already reported,
-  // to avoid spamming the server with repeated identical receipts.
-  const emittedReceivedRef = useRef({}); // convId -> Set(ids)
-  const emittedUpToRef = useRef({}); // convId -> upToMessageId last emitted
+  const emittedReceivedRef = useRef({});
+  const emittedUpToRef = useRef({});
 
-  // helper: emit messages_received for a conversation
   const emitMessagesReceivedForConversation = useCallback((convId, opts = {}) => {
     const s = socketRef?.current;
     if (!s || !convId) return;
@@ -177,12 +160,67 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         s.emit('messages_received', { messageId: id, conversationId: convKey });
         already.add(id);
       }
-    } catch (e) {
-      // swallow; best-effort
-    }
+    } catch (e) {}
   }, [socketRef]);
 
-  // socket listeners (unchanged + delivery/read handlers)
+  const findConversationIndexForMessage = useCallback((list, message) => {
+    if (!Array.isArray(list)) return -1;
+    const messageParticipantIds = new Set();
+    if (Array.isArray(message.participants)) {
+      for (const p of message.participants) {
+        const pid = utilParticipantId(p) ?? (p && String(p));
+        if (pid) messageParticipantIds.add(String(pid));
+      }
+    }
+    const sid = utilParticipantId(message.senderId) ?? (message.senderId && String(message.senderId));
+    if (sid) messageParticipantIds.add(String(sid));
+
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      const cid = String(c._id ?? c.id ?? '');
+      if (cid.startsWith('draft:') || cid.startsWith('pending:')) {
+        const maybeOther = cid.replace(/^draft:|^pending:/, '');
+        if (messageParticipantIds.has(maybeOther)) return i;
+      }
+      const parts = c.participants || [];
+      for (const p of parts) {
+        const pid = utilParticipantId(p) ?? (p && String(p));
+        if (pid && messageParticipantIds.has(String(pid))) {
+          if (String(pid) === String(currentUserId)) continue;
+          return i;
+        }
+      }
+    }
+    return -1;
+  }, [currentUserId]);
+
+  const deriveOtherNameFromMessage = useCallback((message) => {
+    try {
+      if (!message) return null;
+      const parts = Array.isArray(message.participants) ? message.participants : [];
+      for (const p of parts) {
+        const pid = utilParticipantId(p) ?? (typeof p === 'string' ? p : null);
+        if (!pid) continue;
+        if (String(pid) === String(currentUserId)) continue;
+        if (typeof p === 'object') {
+          return p.name ?? p.userName ?? p.username ?? String(pid).slice(0, 6);
+        }
+        return String(pid).slice(0, 6);
+      }
+      const sidCandidate = utilParticipantId(message.senderId) ?? (message.senderId && String(message.senderId));
+      if (sidCandidate && String(sidCandidate) !== String(currentUserId)) {
+        if (typeof message.senderId === 'object') {
+          return message.senderId.name ?? message.senderId.userName ?? message.senderId.username ?? String(sidCandidate).slice(0, 6);
+        }
+        if (participantNameMap && participantNameMap[sidCandidate]) return participantNameMap[sidCandidate];
+        return String(sidCandidate).slice(0, 6);
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }, [currentUserId, participantNameMap]);
+
   useEffect(() => {
     const s = socketRef?.current;
     if (!s) return () => {};
@@ -232,7 +270,37 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
           copy[idx] = { ...copy[idx], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() };
           return copy;
         }
-        return [{ _id: message.conversationId, participants: message.participants ?? [], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...copy];
+
+        const matchIdx = findConversationIndexForMessage(copy, message);
+        if (matchIdx !== -1) {
+          const matched = { ...copy[matchIdx] };
+          matched._id = message.conversationId;
+          matched.lastMessage = message;
+          matched.updatedAt = message.createdAt ?? new Date().toISOString();
+          if (!matched.name) matched.name = deriveOtherNameFromMessage(message) ?? matched.name;
+          const newCopy = copy.slice();
+          newCopy.splice(matchIdx, 1, matched);
+          return newCopy;
+        }
+
+        const participantsFallback = (() => {
+          if (Array.isArray(message.participants) && message.participants.length > 0) return message.participants;
+          const arr = [];
+          if (message.senderId) arr.push(message.senderId);
+          if (currentUserId) arr.push(currentUserId);
+          const uniq = Array.from(new Set(arr.map((x) => (typeof x === 'object' ? (x._id ?? x.id ?? String(x)) : String(x)))));
+          return uniq;
+        })();
+
+        const derivedName = deriveOtherNameFromMessage(message);
+
+        return [{
+          _id: message.conversationId,
+          participants: participantsFallback,
+          name: derivedName || (message.name ?? null),
+          lastMessage: message,
+          updatedAt: message.createdAt ?? new Date().toISOString()
+        }, ...copy];
       });
 
       try {
@@ -251,15 +319,99 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 
     const onMessageSent = (message) => {
       if (!message) return;
+      const convId = String(message.conversationId);
+
       setConversations((prev) => {
-        const idx = (prev || []).findIndex((c) => String(c._id) === String(message.conversationId));
+        const idx = (prev || []).findIndex((c) => String(c._id) === convId);
         if (idx !== -1) {
           const item = { ...prev[idx], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() };
           const copy = prev.slice();
           copy.splice(idx, 1);
           return [item, ...copy];
         }
-        return [{ _id: message.conversationId, participants: message.participants ?? [], lastMessage: message, updatedAt: message.createdAt ?? new Date().toISOString() }, ...(prev || [])];
+
+        if (activeConvId && (String(activeConvId).startsWith('draft:') || String(activeConvId).startsWith('pending:'))) {
+          const otherUserId = String(activeConvId).replace(/^draft:|^pending:/, '');
+          const newCopy = (prev || []).slice();
+          const matchIdx = newCopy.findIndex((c) => String(c._id ?? '') === String(activeConvId));
+          if (matchIdx !== -1) {
+            const matched = { ...newCopy[matchIdx] };
+            matched._id = message.conversationId;
+            matched.lastMessage = message;
+            matched.updatedAt = message.createdAt ?? new Date().toISOString();
+            if (!matched.name) matched.name = deriveOtherNameFromMessage(message) ?? matched.name ?? (matched.participants && matched.participants[1] && matched.participants[1].name) ?? null;
+            newCopy.splice(matchIdx, 1);
+            return [matched, ...newCopy];
+          } else {
+            if (draftConversation && String(draftConversation.userId) === String(otherUserId)) {
+              const matched = {
+                _id: message.conversationId,
+                participants: [
+                  { _id: currentUserId, name: currentUserName },
+                  { _id: draftConversation.userId, name: draftConversation.userName },
+                ],
+                name: draftConversation.userName,
+                lastMessage: message,
+                updatedAt: message.createdAt ?? new Date().toISOString(),
+              };
+              return [matched, ...(prev || [])];
+            }
+          }
+        }
+
+        const copyPrev = (prev || []).slice();
+        const matchIdx2 = findConversationIndexForMessage(copyPrev, message);
+        if (matchIdx2 !== -1) {
+          const matched = { ...copyPrev[matchIdx2] };
+          matched._id = message.conversationId;
+          matched.lastMessage = message;
+          matched.updatedAt = message.createdAt ?? new Date().toISOString();
+          if (!matched.name) matched.name = deriveOtherNameFromMessage(message) ?? matched.name;
+          const newCopy = copyPrev.slice();
+          newCopy.splice(matchIdx2, 1);
+          return [matched, ...newCopy];
+        }
+
+        const participantsFallback = (() => {
+          if (Array.isArray(message.participants) && message.participants.length > 0) return message.participants;
+          const arr = [];
+          if (message.senderId) arr.push(message.senderId);
+          if (currentUserId) arr.push(currentUserId);
+          const uniq = Array.from(new Set(arr.map((x) => (typeof x === 'object' ? (x._id ?? x.id ?? String(x)) : String(x)))));
+          return uniq;
+        })();
+
+        const derivedName = deriveOtherNameFromMessage(message);
+
+        return [{
+          _id: message.conversationId,
+          participants: participantsFallback,
+          name: derivedName || (message.name ?? null),
+          lastMessage: message,
+          updatedAt: message.createdAt ?? new Date().toISOString()
+        }, ...(prev || [])];
+      });
+
+      setMessages((prev) => {
+        if (!prev) return [message];
+        const tempIdx = prev.findIndex((m) => m.isLocal && m.content === message.content);
+        if (tempIdx !== -1) {
+          const copy = prev.slice();
+          copy[tempIdx] = message;
+          return copy;
+        }
+        if (String(loadedConvId) === convId) {
+          return [...prev, message];
+        }
+        if (activeConvId && (String(activeConvId).startsWith('draft:') || String(activeConvId).startsWith('pending:'))) {
+          const otherUserId = String(activeConvId).replace(/^draft:|^pending:/, '');
+          const participantIds = (message.participants || []).map((p) => utilParticipantId(p) ?? (p && String(p)));
+          const senderId = utilParticipantId(message.senderId) ?? (message.senderId && String(message.senderId));
+          if (participantIds.includes(String(otherUserId)) || String(senderId) === String(otherUserId) || (message.participants && message.participants.length === 0 && draftConversation && String(draftConversation.userId) === String(otherUserId))) {
+            return [message];
+          }
+        }
+        return prev;
       });
 
       try {
@@ -271,14 +423,17 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         }
       } catch (e) {}
 
-      if (String(message.conversationId) === String(loadedConvId)) {
-        setMessages((prev) => [...prev, message]);
-      }
       setActiveConvId(String(message.conversationId));
       setLoadedConvId(String(message.conversationId));
+
+      try {
+        const convId = String(message.conversationId);
+        if (convId) {
+          loadMessages(convId).catch(() => {});
+        }
+      } catch (e) {}
     };
 
-    // handle single message delivered/read updates
     const onMessageDelivered = (payload) => {
       if (!payload || !payload.conversationId) return;
       const recipientId = payload.recipientId ?? null;
@@ -352,7 +507,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         console.warn('[ChatPage] socket off error', e && (e.message || e));
       }
     };
-  }, [socketRef, addOnline, removeOnline, addTypingUser, loadedConvId, setConversations]);
+  }, [socketRef, addOnline, removeOnline, addTypingUser, loadedConvId, setConversations, currentUserId, deriveOtherNameFromMessage, participantNameMap, findConversationIndexForMessage, activeConvId, draftConversation, currentUserName]);
 
   useEffect(() => {
     const onOffline = () => {
@@ -401,10 +556,8 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 
   useEffect(() => {
     fillParticipantNames(conversations);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversations]);
 
-  // helper to robustly extract last message id (avoids mixing || and ??)
   const getLastMessageId = (c) => {
     if (!c) return null;
     const lm = c.lastMessage ?? c.lastMessageContent ?? null;
@@ -414,7 +567,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     return null;
   };
 
-  const loadMessages = async (convId) => {
+  async function loadMessages(convId) {
     if (!convId) return;
     try {
       const res = await axios.get(`http://localhost:3000/chats/conversations/${convId}/messages`, {
@@ -433,16 +586,13 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         if (el) el.scrollTop = el.scrollHeight;
       }, 50);
 
-      // After loading messages, immediately notify server about received messages
-      // compute messageIds that are from others and not yet delivered to this user
       try {
         if (msgs && msgs.length > 0) {
           const candidateIds = msgs
             .filter((m) => {
               const sid = utilParticipantId(m.senderId) ?? (m.senderId && String(m.senderId)) ?? null;
               if (!sid) return false;
-              if (String(sid) === String(currentUserId)) return false; // not from others
-              // if deliveredTo exists and already contains current user, skip
+              if (String(sid) === String(currentUserId)) return false;
               const delivered = Array.isArray(m.deliveredTo) ? m.deliveredTo.map(String) : [];
               return !delivered.includes(String(currentUserId));
             })
@@ -452,7 +602,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
           if (candidateIds.length > 0) {
             emitMessagesReceivedForConversation(convId, { messageIds: candidateIds });
           } else {
-            // fallback: emit upToMessageId for last message from other if any
             const lastOther = [...msgs].reverse().find((m) => {
               const sid = utilParticipantId(m.senderId) ?? (m.senderId && String(m.senderId)) ?? null;
               return sid && String(sid) !== String(currentUserId);
@@ -467,9 +616,8 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       console.error('[ChatPage] Failed to load messages', e && (e.message || e));
       alert('Failed to load messages');
     }
-  };
+  }
 
-  // When loadedConvId or messages change, attempt to notify server of receipt for unseen messages
   useEffect(() => {
     if (!loadedConvId || !messages || messages.length === 0) return;
     try {
@@ -498,7 +646,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     } catch (e) {}
   }, [loadedConvId, messages, emitMessagesReceivedForConversation, currentUserId]);
 
-  // When tab becomes visible, re-emit receipts for conversation in view
   useEffect(() => {
     const onVisibility = () => {
       if (document.visibilityState === 'visible' && loadedConvId && messages && messages.length > 0) {
@@ -521,7 +668,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [loadedConvId, messages, emitMessagesReceivedForConversation, currentUserId]);
 
-  // scroll handler: when near bottom, emit receipts
   useEffect(() => {
     const el = document.getElementById('messages-wrap') || messagesWrapRef.current;
     if (!el) return () => {};
@@ -559,6 +705,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
   const sendMessage = async (content) => {
     if (!content || !content.trim()) return;
     const s = socketRef.current;
+
     if (loadedConvId) {
       if (!s || !s.connected) { alert('Socket not connected'); return; }
       s.emit('send_message', { conversationId: loadedConvId, content, messageType: 'text' });
@@ -568,12 +715,91 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     if (activeConvId && String(activeConvId).startsWith('draft:') && draftConversation) {
       const otherId = draftConversation.userId;
       if (!otherId) return;
+
+      const tempId = `temp:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+      const pendingId = `pending:${otherId}`;
+      const tempMsg = {
+        _id: tempId,
+        content,
+        senderId: currentUserId,
+        conversationId: pendingId,
+        participants: [
+          { _id: currentUserId, name: currentUserName },
+          ...(String(otherId) === String(currentUserId) ? [] : [{ _id: otherId, name: draftConversation.userName }]),
+        ],
+        createdAt: new Date().toISOString(),
+        deliveredTo: [],
+        isLocal: true,
+      };
+
+      setMessages((prev) => [...(prev || []), tempMsg]);
+
+      setConversations((prev) => {
+        const cleaned = removeAllDraftsFromList(prev || []);
+        const exists = (cleaned || []).some((c) => String(c._id) === pendingId || (Array.isArray(c.participants) && c.participants.some((p) => String(utilParticipantId(p) ?? p) === String(otherId))));
+        if (exists) return cleaned;
+        return [
+          ...(cleaned || []),
+          {
+            _id: pendingId,
+            participants: (String(otherId) === String(currentUserId))
+              ? [{ _id: currentUserId, name: currentUserName }]
+              : [
+                  { _id: currentUserId, name: currentUserName },
+                  { _id: otherId, name: draftConversation.userName },
+                ],
+            name: String(otherId) === String(currentUserId) ? 'SavedMessages' : draftConversation.userName,
+            lastMessage: tempMsg,
+            updatedAt: new Date().toISOString(),
+          },
+        ];
+      });
+
+      setActiveConvId(pendingId);
+
       if (s && s.connected) {
-        s.emit('send_message', { participantIds: [otherId], content, messageType: 'text' });
-        setDraftConversation(null);
-        setConversations((prev) => removeDraftForUser(prev, otherId));
-        return;
+        if (String(otherId) === String(currentUserId)) {
+          try {
+            const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}`, {
+              content, messageType: 'text',
+            }, { headers: { Authorization: `Bearer ${token}` } });
+            const saved = res.data;
+            const convId = saved.conversationId ?? saved.conversation?._id ?? saved._id ?? null;
+            if (convId) {
+              await refresh();
+              setDraftConversation(null);
+              setActiveConvId(convId);
+              await loadMessages(convId);
+            } else {
+              setMessages((prev) => {
+                const copy = (prev || []).slice();
+                const tidx = copy.findIndex((m) => m.isLocal && m._id === tempId);
+                if (tidx !== -1) {
+                  copy[tidx] = saved;
+                  return copy;
+                }
+                return [...copy, saved];
+              });
+            }
+            return;
+          } catch (err) {
+            console.error('[ChatPage] Failed to send initial self-message via HTTP', err?.response?.data ?? err?.message ?? err);
+            setMessages((prev) => (prev || []).filter((m) => !(m.isLocal && m._id === tempId)));
+            setConversations((prev) => (prev || []).filter((c) => String(c._id ?? c.id ?? '') !== pendingId));
+            if (String(activeConvId) === pendingId) {
+              setActiveConvId(null);
+              setLoadedConvId(null);
+              setDraftConversation(null);
+            }
+            alert('Failed to send message');
+            return;
+          }
+        } else {
+          s.emit('send_message', { participantIds: [otherId], content, messageType: 'text' });
+          return;
+        }
       }
+
       try {
         const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}`, {
           content, messageType: 'text',
@@ -586,7 +812,15 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
           setActiveConvId(convId);
           await loadMessages(convId);
         } else {
-          setMessages((prev) => [...prev, saved]);
+          setMessages((prev) => {
+            const copy = (prev || []).slice();
+            const tidx = copy.findIndex((m) => m.isLocal && m.content === content);
+            if (tidx !== -1) {
+              copy[tidx] = saved;
+              return copy;
+            }
+            return [...copy, saved];
+          });
         }
       } catch (err) {
         console.error('[ChatPage] Failed to send initial message', err && (err.message || err));
@@ -614,9 +848,55 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       return;
     }
 
+    if (payload && payload.saved) {
+      const otherUserId = currentUserId;
+      setActiveConvId(`draft:${otherUserId}`);
+      setLoadedConvId(null);
+      setMessages([]);
+      setDraftConversation({ userId: otherUserId, userName: currentUserName });
+      setConversations((prev) => {
+        const cleaned = removeAllDraftsFromList(prev || []);
+        const draftId = `draft:${otherUserId}`;
+        if (cleaned.some((c) => String(c._id) === draftId)) return cleaned;
+        return [...cleaned, {
+          _id: draftId,
+          participants: [
+            { _id: currentUserId, name: currentUserName }
+          ],
+          name: 'SavedMessages',
+          lastMessage: null,
+          updatedAt: new Date().toISOString(),
+        }];
+      });
+      return;
+    }
+
     if (payload && payload.draft) {
       const otherUserId = payload.userId;
       const otherUserName = payload.userName;
+
+      if (String(otherUserId) === String(currentUserId)) {
+        const draftId = `draft:${otherUserId}`;
+        setActiveConvId(draftId);
+        setLoadedConvId(null);
+        setMessages([]);
+        setDraftConversation({ userId: otherUserId, userName: otherUserName ?? currentUserName });
+        setConversations((prev) => {
+          const cleaned = removeAllDraftsFromList(prev);
+          if (cleaned.some((c) => String(c._id) === draftId)) return cleaned;
+          return [...cleaned, {
+            _id: draftId,
+            participants: [
+              { _id: currentUserId, name: currentUserName },
+            ],
+            name: 'SavedMessages',
+            lastMessage: null,
+            updatedAt: new Date().toISOString(),
+          }];
+        });
+        return;
+      }
+
       const existing = (conversations || []).find((c) => {
         const parts = c.participants || [];
         return parts.some((p) => utilParticipantId(p) && String(utilParticipantId(p)) === String(otherUserId));
@@ -698,7 +978,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
   const socketConnected = !!(socketRef && socketRef.current && socketRef.current.connected);
   const showConnecting = !isNetworkOnline || !socketConnected;
 
-  // Context menu handlers for conversation list (unchanged)
   const openContextMenu = (e, conv) => {
     e.preventDefault();
     setCtxTargetConv(conv);
@@ -765,7 +1044,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     }
   };
 
-  // delete a single message (called by MessageList)
   const handleDeleteMessage = async (messageId, messageObj) => {
     if (!messageId) return;
     if (!loadedConvId) {
@@ -803,14 +1081,12 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     }
   };
 
-  // EDIT message (called by MessageList)
   const handleEditMessage = async (messageId, newContent) => {
     if (!messageId) return { ok: false, error: 'no id' };
     if (!newContent || String(newContent).trim().length === 0) {
       return { ok: false, error: 'content required' };
     }
     if (!loadedConvId) {
-      // local edit for draft
       setMessages((prev) => (prev || []).map((m) => {
         if (String(m._id ?? m.id ?? '') === String(messageId)) {
           return { ...m, content: newContent, edited: true, updatedAt: new Date().toISOString() };
@@ -837,7 +1113,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         (typeof serverData === 'object' && Object.keys(serverData).length > 0)
       ));
 
-      // Update local messages always with new content so user sees the edit; only mark edited flag when server changed content.
       setMessages((prev) => (prev || []).map((m) => {
         if (String(m._id ?? m.id ?? '') === String(messageId)) {
           return { ...m, content: newContent, edited: wasEdited ? true : (m.edited || false), updatedAt: new Date().toISOString() };
@@ -845,7 +1120,6 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         return m;
       }));
 
-      // If edited message is the conversation lastMessage and server indicated change, update it there too
       if (wasEdited) {
         setConversations((prev) => (prev || []).map((c) => {
           if (String(c._id ?? c.id ?? '') === String(loadedConvId)) {
@@ -874,7 +1148,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       <div className="sidebar">
         <div className="title">Chats</div>
 
-        <ChatForm onConversationStart={handleConversationStart} conversations={conversations} setConversations={setConversations} />
+        <ChatForm onConversationStart={handleConversationStart} conversations={conversations} setConversations={setConversations} currentUserId={currentUserId} />
 
         <h3 style={{ color: 'var(--muted)', marginTop: 8 }}>Known Conversations</h3>
         <div className="conversations-list">
@@ -944,12 +1218,16 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
           ) : activeConvId && String(activeConvId).startsWith('draft:') ? (
             <>
               <div style={{ padding: 12, color: 'var(--muted)' }}>
-                Chat with <strong>{draftConversation?.userName ?? draftConversation?.userId}</strong>
+                {String(draftConversation?.userId) === String(currentUserId) ? (
+                  <>Saved messages</>
+                ) : (
+                  <>Chat with <strong>{draftConversation?.userName ?? draftConversation?.userId}</strong></>
+                )}
               </div>
               <MessageList
                 messages={messages}
                 currentUserId={currentUserId}
-                participantNameMap={{ ...participantNameMap, [draftConversation?.userId]: draftConversation?.userName }}
+                participantNameMap={{ ...(draftConversation?.userId ? { [draftConversation.userId]: draftConversation.userName } : {}), ...participantNameMap }}
                 currentUserName={currentUserName}
                 onDeleteMessage={handleDeleteMessage}
                 onEditMessage={handleEditMessage}
@@ -968,7 +1246,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 
         {activeConvId ? (
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.03)', padding: 12 }}>
-            <MessageInput sendMessage={sendMessage} conversationId={loadedConvId || (draftConversation ? `draft:${draftConversation.userId}` : '')} socketRef={socketRef} />
+            <MessageInput sendMessage={sendMessage} conversationId={loadedConvId || (draftConversation ? `draft:${draftConversation.userId}` : (activeConvId || ''))} socketRef={socketRef} />
           </div>
         ) : null}
       </div>

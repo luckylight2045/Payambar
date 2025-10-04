@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -10,10 +11,15 @@ import { UserSignUpDto } from './dtos/user.signup.dto';
 import * as bcrypt from 'bcrypt';
 import { UserUpdateDto } from './dtos/user.update.dto';
 import { SafeUser } from 'src/interfaces/safe.user.interface';
+import { InjectRedis } from '@nestjs-modules/ioredis';
+import Redis from 'ioredis';
 
 @Injectable()
 export class UserService {
-  constructor(@InjectModel(User.name) private readonly user: Model<User>) {}
+  constructor(
+    @InjectModel(User.name) private readonly user: Model<User>,
+    @InjectRedis() private readonly ioredis: Redis,
+  ) {}
 
   async signup(body: UserSignUpDto) {
     const salt = await bcrypt.genSalt(1043);
@@ -143,5 +149,119 @@ export class UserService {
       .limit(limit)
       .lean()
       .exec();
+  }
+
+  async blockUser(userId: string, blockUserId: string) {
+    const user = await this.getUserById(userId);
+
+    if (!user) {
+      throw new NotFoundException('user not found');
+    }
+
+    const blockUser = await this.getUserById(blockUserId);
+
+    if (!blockUser) {
+      throw new NotFoundException('target block user not found');
+    }
+
+    const res = await this.user
+      .updateOne(
+        {
+          _id: userId,
+        },
+        {
+          $addToSet: { blockedUsers: new Types.ObjectId(blockUserId) },
+        },
+      )
+      .exec();
+
+    if (!res) {
+      throw new NotFoundException('user not found');
+    }
+
+    try {
+      await this.ioredis.sadd(`blocked:${userId}`, blockUserId);
+    } catch (err) {
+      throw new InternalServerErrorException(err);
+    }
+
+    return { ok: true };
+  }
+
+  async unblockUser(userId: string, unblockUserId: string) {
+    const user = await this.getUserById(userId);
+
+    if (!user) {
+      throw new NotFoundException('user not found');
+    }
+
+    const unblockedUser = await this.getUserById(unblockUserId);
+
+    if (!unblockedUser) {
+      throw new NotFoundException('target unblock user not found');
+    }
+
+    const oid = Types.ObjectId.isValid(unblockUserId)
+      ? new Types.ObjectId(unblockUserId)
+      : unblockUserId;
+    const res = await this.user
+      .updateOne(
+        {
+          _id: Types.ObjectId.isValid(userId)
+            ? new Types.ObjectId(userId)
+            : userId,
+        },
+        { $pull: { blockedUsers: oid } },
+      )
+      .exec();
+
+    if (!res) {
+      throw new NotFoundException('user not found');
+    }
+
+    try {
+      await this.ioredis.srem(`block:${userId}`, String(unblockUserId));
+    } catch (err) {
+      throw new InternalServerErrorException(err);
+    }
+    return { ok: true };
+  }
+
+  async getBlockedUsers(userId: string) {
+    const user = await this.user
+      .findById(userId)
+      .select('blockedUsers')
+      .lean()
+      .exec();
+
+    return (user?.blockedUsers || []).map(String);
+  }
+
+  async isBlockedBy(
+    targetId: string,
+    maybeBlockedId: string,
+  ): Promise<boolean> {
+    if (!targetId || !maybeBlockedId) return false;
+    const queryTarget = Types.ObjectId.isValid(targetId)
+      ? new Types.ObjectId(targetId)
+      : targetId;
+    const queryBlocked = Types.ObjectId.isValid(maybeBlockedId)
+      ? new Types.ObjectId(maybeBlockedId)
+      : maybeBlockedId;
+    const res = await this.user
+      .findOne({ _id: queryTarget, blockedUsers: queryBlocked })
+      .select('_id')
+      .lean()
+      .exec();
+    return !!res;
+  }
+
+  async blockStatus(userId: string, otherUserId: string) {
+    const myBlockedLIst = await this.getBlockedUsers(userId);
+
+    const blockedByMe = myBlockedLIst.includes(otherUserId);
+    const blockedByThem = await this.isBlockedBy(otherUserId, userId);
+
+    return { blockedByMe, blockedByThem };
   }
 }
