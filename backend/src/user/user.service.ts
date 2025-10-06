@@ -13,6 +13,7 @@ import { UserUpdateDto } from './dtos/user.update.dto';
 import { SafeUser } from 'src/interfaces/safe.user.interface';
 import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
+import { UserWithPresence } from './types/user.presence.types';
 
 @Injectable()
 export class UserService {
@@ -48,8 +49,25 @@ export class UserService {
     return await this.user.find({}, { password: 0 }).exec();
   }
 
-  async getUserById(userId: string) {
-    return await this.user.findById(userId).exec();
+  async getUserById(userId: string): Promise<UserWithPresence | null> {
+    const userDoc = await this.user.findById(userId).lean().exec();
+    if (!userDoc) return null;
+
+    const onlineCount = await this.ioredis
+      .scard(`online:${userId}`)
+      .catch(() => 0);
+    const online = Number(onlineCount) > 0;
+    const lastSeenAt = online
+      ? null
+      : ((await this.ioredis.get(`last_seen:${userId}`).catch(() => null)) ??
+        null);
+
+    return {
+      ...userDoc,
+      _id: userDoc._id.toString(),
+      online,
+      lastSeenAt,
+    };
   }
 
   async getUserByPhoneNumber(phoneNumber: string) {
@@ -220,7 +238,7 @@ export class UserService {
     }
 
     try {
-      await this.ioredis.srem(`block:${userId}`, String(unblockUserId));
+      await this.ioredis.srem(`blocked:${userId}`, String(unblockUserId));
     } catch (err) {
       throw new InternalServerErrorException(err);
     }

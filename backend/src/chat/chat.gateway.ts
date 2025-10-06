@@ -114,6 +114,14 @@ export class ChatGateway
       }
 
       try {
+        await this.ioredis.del(`last_seen:${userId}`);
+      } catch (err) {
+        this.logger.warn(
+          `Failed to clear last_seen for ${userId}: ${(err as Error).message}`,
+        );
+      }
+
+      try {
         const members = await this.ioredis.smembers(`online:${userId}`);
         if (members && members.length > 0) {
           const pipeline = this.ioredis.pipeline();
@@ -238,6 +246,16 @@ export class ChatGateway
       this.logger.debug('remaining', remaining);
 
       if (remaining === 0) {
+        try {
+          await this.ioredis.set(
+            `last_seen:${userId}`,
+            new Date().toISOString(),
+          );
+        } catch (err) {
+          this.logger.warn(
+            `Failed to set last_seen for ${userId}: ${(err as Error).message}`,
+          );
+        }
         try {
           await this.ioredis.srem('online_users', userId);
         } catch (err) {

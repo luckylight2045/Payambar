@@ -1,19 +1,5 @@
 import React, { useEffect, useRef } from 'react';
 
-/**
- * ContextMenu
- * Props:
- *  - visible (bool)
- *  - x, y (pixel coords)
- *  - onClose() => void
- *  - onClearHistory() => Promise
- *  - onDeleteConversation() => Promise
- *  - onBlockUser(otherUserId) => Promise
- *  - blockState: { blockedByMe?: bool, blockedByThem?: bool } optional
- *  - isDraft (bool)
- *
- * Note: onBlockUser will be called with a single argument: otherUserId (string) or null (if not provided).
- */
 export default function ContextMenu({
   visible,
   x = 0,

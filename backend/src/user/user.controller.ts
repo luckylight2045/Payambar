@@ -91,12 +91,6 @@ export class UserController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get(':id')
-  async getUserById(@Param('id') userId: string) {
-    return this.userService.getUserById(userId);
-  }
-
-  @UseGuards(JwtAuthGuard)
   @Get('blocked/:id')
   async blockUser(
     @Param('id') blockedUserId: string,
@@ -106,7 +100,7 @@ export class UserController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Delete('block/:id')
+  @Delete('unblock/:id')
   async unblockUser(
     @Param('id') blockedUserId: string,
     @CurrentUser() user: HydratedDocument<User>,
@@ -130,5 +124,11 @@ export class UserController {
     @Param('id') otherUserId: string,
   ) {
     return await this.userService.blockStatus(user._id.toString(), otherUserId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id')
+  async getUserById(@Param('id') userId: string) {
+    return this.userService.getUserById(userId);
   }
 }

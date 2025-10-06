@@ -68,6 +68,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
   const [messages, setMessages] = useState([]);
   const [participantNameMap, setParticipantNameMap] = useState({});
   const [draftConversation, setDraftConversation] = useState(null);
+  const [participantMeta, setParticipantMeta] = useState({});
 
   const [onlineUsers, setOnlineUsers] = useState(() => new Set());
   const [isNetworkOnline, setIsNetworkOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
@@ -84,8 +85,11 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
   const [ctxX, setCtxX] = useState(0);
   const [ctxY, setCtxY] = useState(0);
   const [ctxTargetConv, setCtxTargetConv] = useState(null);
-
+  const [ctxOtherUserId, setCtxOtherUserId] = useState(null);
+  
   const messagesWrapRef = useRef(null);
+
+  const [blockedMap, setBlockedMap] = useState({});
 
   const addOnline = useCallback((id) => {
     setOnlineUsers((prev) => {
@@ -233,12 +237,23 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       const uid = payload && (payload.userId ?? payload);
       if (!uid) return;
       addOnline(uid);
+      setParticipantMeta(prev => {
+        const copy = { ...(prev || {}) };
+        copy[String(uid)] = { ...(copy[String(uid)] || {}), online: true, lastSeenAt: null };
+        return copy;
+      });
     };
     const onUserDisconnected = (payload) => {
       const uid = payload && (payload.userId ?? payload);
       if (!uid) return;
       removeOnline(uid);
+      setParticipantMeta(prev => {
+        const copy = { ...(prev || {}) };
+        copy[String(uid)] = { ...(copy[String(uid)] || {}), online: false, lastSeenAt: new Date().toISOString() };
+        return copy;
+      });
     };
+    
     const onTyping = (payload) => {
       if (!payload) return;
       const convId = payload.conversationId;
@@ -536,24 +551,39 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
         const id = utilParticipantId(p);
         if (!id) continue;
         if (String(id) === String(currentUserId)) continue;
-        if (!participantNameMap[id]) idsToFetch.add(id);
+        if (!participantMeta[id]) idsToFetch.add(id);
       }
     }
     if (idsToFetch.size === 0) return;
     const ids = Array.from(idsToFetch);
-    const promises = ids.map((id) => axios.get(`http://localhost:3000/users/${id}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => ({ id, name: r.data?.userName ?? r.data?.name ?? r.data?.username ?? null }))
-      .catch(() => ({ id, name: null })));
+    const promises = ids.map((id) =>
+      axios.get(`http://localhost:3000/users/${id}`, { headers: { Authorization: `Bearer ${token}` } })
+        .then((r) => {
+          const data = r.data ?? {};
+          const name = data?.userName ?? data?.name ?? data?.username ?? id;
+          return { id, name, online: !!data?.online, lastSeenAt: data?.lastSeenAt ?? null };
+        })
+        .catch(() => ({ id, name: id.slice(0, 6), online: false, lastSeenAt: null }))
+    );
+  
     const results = await Promise.all(promises);
     setParticipantNameMap((prev) => {
-      const copy = { ...prev };
+      const copy = { ...(prev || {}) };
       for (const r of results) {
-        copy[r.id] = r.name || r.id.slice(0, 6);
+        copy[r.id] = r.name;
+      }
+      return copy;
+    });
+  
+    setParticipantMeta((prev) => {
+      const copy = { ...(prev || {}) };
+      for (const r of results) {
+        copy[r.id] = { name: r.name, online: r.online, lastSeenAt: r.lastSeenAt };
       }
       return copy;
     });
   };
-
+  
   useEffect(() => {
     fillParticipantNames(conversations);
   }, [conversations]);
@@ -760,7 +790,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       if (s && s.connected) {
         if (String(otherId) === String(currentUserId)) {
           try {
-            const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}`, {
+            const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}/messages`, {
               content, messageType: 'text',
             }, { headers: { Authorization: `Bearer ${token}` } });
             const saved = res.data;
@@ -801,7 +831,7 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
       }
 
       try {
-        const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}`, {
+        const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}/messages`, {
           content, messageType: 'text',
         }, { headers: { Authorization: `Bearer ${token}` } });
         const saved = res.data;
@@ -837,6 +867,20 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     const convs = await refresh();
     return convs;
   };
+
+  const formatLastSeenText = (meta) => {
+    if (!meta) return '';
+    if (meta.online) return 'online';
+    const iso = meta.lastSeenAt;
+    if (!iso) return 'last seen recently';
+    const diff = Date.now() - new Date(iso).getTime();
+    const sec = Math.floor(diff / 1000);
+    if (sec < 60) return 'last seen just now';
+    if (sec < 3600) return `last seen ${Math.floor(sec / 60)} minutes ago`;
+    if (sec < 86400) return `last seen ${Math.floor(sec / 3600)} hours ago`;
+    return `last seen ${new Date(iso).toLocaleString()}`;
+  };
+  
 
   const handleConversationStart = (payload) => {
     if (!payload) return;
@@ -980,12 +1024,35 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 
   const openContextMenu = (e, conv) => {
     e.preventDefault();
+    const otherId = getOtherUserIdFromConv(conv);
     setCtxTargetConv(conv);
+    setCtxOtherUserId(otherId);
     setCtxX(e.clientX);
     setCtxY(e.clientY);
     setCtxVisible(true);
+  
+    // proactively query block status for this other user so menu shows correct state
+    if (otherId && token) {
+      axios.get(`http://localhost:3000/users/block/status/${encodeURIComponent(otherId)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((res) => {
+          const data = res?.data ?? {};
+          setBlockedMap((prev) => ({
+            ...(prev || {}),
+            [String(otherId)]: {
+              ...(prev?.[String(otherId)] || {}),
+              blockedByMe: !!data.blockedByMe,
+              blockedByThem: !!data.blockedByThem,
+            },
+          }));
+        })
+        .catch(() => {
+          // ignore fetch errors for menu, fallback to what we have locally
+        });
+    }
   };
-
+  
   const closeContextMenu = () => {
     setCtxVisible(false);
     setCtxTargetConv(null);
@@ -1141,6 +1208,143 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
     }
   };
 
+  const getOtherUserIdFromConv = useCallback((conv) => {
+    if (!conv) return null;
+    const parts = conv.participants || [];
+    for (const p of parts) {
+      const id = utilParticipantId(p) ?? (p && String(p));
+      if (!id) continue;
+      if (String(id) === String(currentUserId)) continue;
+      return String(id);
+    }
+    if (parts.length === 0 || parts.every((p) => String(utilParticipantId(p) ?? p) === String(currentUserId))) {
+      return String(currentUserId);
+    }
+    return null;
+  }, [currentUserId]);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadBlocked = async () => {
+      try {
+        const res = await axios.get('http://localhost:3000/users/blocked', { headers: { Authorization: `Bearer ${token}` } });
+        if (!mounted) return;
+        const arr = Array.isArray(res?.data) ? res.data : [];
+        setBlockedMap((prev) => {
+          const copy = { ...(prev || {}) };
+          for (const id of arr) copy[String(id)] = { ...(copy[String(id)] || {}), blockedByMe: true };
+          return copy;
+        });
+      } catch (e) {}
+    };
+    if (token) loadBlocked();
+    return () => { mounted = false; };
+  }, [token]);
+
+  // --- Add this useEffect to proactively load block-status for the currently active conversation's other user ---
+// --- Add this useEffect to proactively load block-status for the currently active conversation's other user ---
+useEffect(() => {
+  let mounted = true;
+
+  try {
+    let otherId = null;
+
+    // draft: prioritize draftConversation if activeConvId is a draft
+    if (String(activeConvId || '').startsWith('draft:') && draftConversation) {
+      otherId = String(draftConversation.userId);
+    } else {
+      // prefer loadedConvId (messages loaded), otherwise activeConvId
+      const convObj = (conversations || []).find((c) => String(c._id ?? c.id ?? '') === String(loadedConvId || activeConvId || ''));
+      otherId = getOtherUserIdFromConv(convObj);
+    }
+
+    if (!otherId || !token) return;
+
+    // fetch block status for this other user and update blockedMap
+    axios.get(`http://localhost:3000/users/block/status/${encodeURIComponent(otherId)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    .then((res) => {
+      if (!mounted) return;
+      const data = res?.data ?? {};
+      setBlockedMap((prev) => ({
+        ...(prev || {}),
+        [String(otherId)]: {
+          ...(prev?.[String(otherId)] || {}),
+          blockedByMe: !!data.blockedByMe,
+          blockedByThem: !!data.blockedByThem,
+        },
+      }));
+    })
+    .catch(() => {
+      // ignore fetch errors — fallback to whatever we have locally
+    });
+  } catch (e) {
+    // swallow
+  }
+
+  return () => {
+    mounted = false;
+  };
+  // include getOtherUserIdFromConv to satisfy hook deps
+}, [activeConvId, loadedConvId, draftConversation, conversations, token, getOtherUserIdFromConv]);
+
+
+
+  const handleBlockUser = async (otherUserId, currentlyBlockedByMe = false) => {
+    if (!otherUserId) {
+      alert('Could not determine user to block/unblock');
+      return;
+    }
+  
+    try {
+      if (currentlyBlockedByMe) {
+        // unblock
+        const res = await axios.delete(`http://localhost:3000/users/unblock/${encodeURIComponent(otherUserId)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        // success -> update local state
+        setBlockedMap((prev) => {
+          const copy = { ...(prev || {}) };
+          copy[String(otherUserId)] = { ...(copy[String(otherUserId)] || {}), blockedByMe: false };
+          return copy;
+        });
+        setConversations((prev) => (prev || []).map((c) => {
+          const cid = c._id ?? c.id ?? '';
+          const other = getOtherUserIdFromConv(c);
+          if (String(other) === String(otherUserId)) {
+            return { ...c, blockedByMe: false };
+          }
+          return c;
+        }));
+        alert('User unblocked');
+      } else {
+        // block
+        const res = await axios.get(`http://localhost:3000/users/blocked/${encodeURIComponent(otherUserId)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        // success -> update local state
+        setBlockedMap((prev) => {
+          const copy = { ...(prev || {}) };
+          copy[String(otherUserId)] = { ...(copy[String(otherUserId)] || {}), blockedByMe: true };
+          return copy;
+        });
+        setConversations((prev) => (prev || []).map((c) => {
+          const cid = c._id ?? c.id ?? '';
+          const other = getOtherUserIdFromConv(c);
+          if (String(other) === String(otherUserId)) {
+            return { ...c, blockedByMe: true };
+          }
+          return c;
+        }));
+        alert('User blocked');
+      }
+    } catch (err) {
+      console.error('[ChatPage] block/unblock failed', err?.response?.data ?? err?.message ?? err);
+      alert('Failed to change block state');
+    }
+  };
+
   return (
     <div className="app-container">
       <style id="chat-page-inline-styles" dangerouslySetInnerHTML={{ __html: css }} />
@@ -1204,6 +1408,31 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 
       <div className="chat-main">
         {showConnecting ? <div className="connecting-banner">Connecting…</div> : null}
+        {/* chat header showing other participant name + last seen */}
+<div style={{ padding: '12px 18px', borderBottom: '1px solid rgba(255,255,255,0.03)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+  <div style={{ fontWeight: 700, fontSize: 16 }}>
+    {(() => {
+      const convObj = (conversations || []).find((c) => String(c._id ?? c.id ?? '') === String(loadedConvId || activeConvId || ''));
+      const otherName = convObj ? (convObj.name || getOtherNameForConversation(convObj)) : '';
+      return otherName || 'Unknown';
+    })()}
+  </div>
+  <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+    {(() => {
+      // compute the other user id for header display
+      let otherId = null;
+      if (String(activeConvId || '').startsWith('draft:') && draftConversation) {
+        otherId = String(draftConversation.userId);
+      } else {
+        const convObj = (conversations || []).find((c) => String(c._id ?? c.id ?? '') === String(loadedConvId || activeConvId || ''));
+        otherId = getOtherUserIdFromConv(convObj);
+      }
+      if (!otherId) return '';
+      const meta = participantMeta[String(otherId)] || {};
+      return formatLastSeenText(meta);
+    })()}
+  </div>
+</div>
 
         <div className="messages-wrap" id="messages-wrap" ref={messagesWrapRef}>
           {loadedConvId ? (
@@ -1246,20 +1475,45 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
 
         {activeConvId ? (
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.03)', padding: 12 }}>
-            <MessageInput sendMessage={sendMessage} conversationId={loadedConvId || (draftConversation ? `draft:${draftConversation.userId}` : (activeConvId || ''))} socketRef={socketRef} />
+            {(() => {
+              let otherId = null;
+              if (String(activeConvId).startsWith('draft:') && draftConversation) {
+                otherId = String(draftConversation.userId);
+              } else {
+                const convObj = (conversations || []).find((c) => String(c._id ?? c.id ?? '') === String(loadedConvId || activeConvId));
+                otherId = getOtherUserIdFromConv(convObj);
+              }
+              const status = otherId ? (blockedMap[String(otherId)] || {}) : {};
+              if (status.blockedByMe) {
+                return <div style={{ color: 'var(--muted)', padding: 8 }}>You blocked this user</div>;
+              }
+              if (status.blockedByThem) {
+                return <div style={{ color: 'var(--muted)', padding: 8 }}>You've been blocked by the user</div>;
+              }
+              return <MessageInput sendMessage={sendMessage} conversationId={loadedConvId || (draftConversation ? `draft:${draftConversation.userId}` : (activeConvId || ''))} socketRef={socketRef} />;
+            })()}
           </div>
         ) : null}
       </div>
+     
 
       <ContextMenu
-        visible={ctxVisible}
-        x={ctxX}
-        y={ctxY}
-        isDraft={ctxTargetConv ? String((ctxTargetConv._id ?? ctxTargetConv.id ?? '')).startsWith('draft:') : false}
-        onClose={closeContextMenu}
-        onClearHistory={handleClearHistory}
-        onDeleteConversation={handleDeleteConversation}
-      />
+  visible={ctxVisible}
+  x={ctxX}
+  y={ctxY}
+  isDraft={ctxTargetConv ? String((ctxTargetConv._id ?? ctxTargetConv.id ?? '')).startsWith('draft:') : false}
+  onClose={closeContextMenu}
+  onClearHistory={handleClearHistory}
+  onDeleteConversation={handleDeleteConversation}
+  // ContextMenu will call onBlockUser(otherUserId, blockedByMe)
+  onBlockUser={async (otherUserId, currentlyBlockedByMe) => {
+    await handleBlockUser(otherUserId, currentlyBlockedByMe);
+    closeContextMenu();
+  }}
+  otherUserId={ctxOtherUserId}
+  blockState={ctxOtherUserId ? (blockedMap[String(ctxOtherUserId)] || {}) : {}}
+/>
+
     </div>
   );
 }
