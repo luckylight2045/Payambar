@@ -85,3 +85,142 @@ body{font-family:Inter,system-ui,Arial,Helvetica,sans-serif;margin:0}
     padding-top: 12px;
   }
   
+/* Beautiful scrollbars — uses your theme variables */
+/* Recommended: place after other CSS so it overrides generic rules */
+
+/* Tuneable variables */
+:root {
+  --scrollbar-width: 12px; /* default width for desktop */
+  --scrollbar-thumb-radius: 10px;
+  --scrollbar-track-radius: 12px;
+
+  /* thumb colors */
+  --scrollbar-thumb-grad-start: rgba(43,110,246,0.95); /* uses --accent feel */
+  --scrollbar-thumb-grad-end: rgba(43,156,255,0.85);
+  --scrollbar-thumb-muted: rgba(255,255,255,0.06);
+
+  /* track */
+  --scrollbar-track: rgba(255,255,255,0.02);
+
+  /* hover */
+  --scrollbar-thumb-hover-start: rgba(43,110,246,1);
+  --scrollbar-thumb-hover-end: rgba(43,156,255,1);
+
+  /* shadow */
+  --scrollbar-shadow: 0 4px 14px rgba(43,110,246,0.08);
+}
+
+/* ----- Chromium / WebKit (Chrome, Edge, Safari) ----- */
+/* Global default (applies to elements that use the default scrollbar) */
+*::-webkit-scrollbar {
+  width: var(--scrollbar-width);
+  height: var(--scrollbar-width);
+}
+
+*::-webkit-scrollbar-track {
+  background: linear-gradient(180deg, rgba(255,255,255,0.01), var(--scrollbar-track));
+  border-radius: var(--scrollbar-track-radius);
+  margin: 4px 0; /* small breathing room */
+}
+
+/* Thumb (draggable) */
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--scrollbar-thumb-grad-start), var(--scrollbar-thumb-grad-end));
+  border-radius: var(--scrollbar-thumb-radius);
+  border: 3px solid transparent;          /* creates padding inside thumb */
+  background-clip: padding-box;
+  box-shadow: var(--scrollbar-shadow);
+  min-height: 28px;
+  transition: transform 140ms ease, box-shadow 140ms ease, background 120ms ease;
+  opacity: 0.98;
+}
+
+/* Thumb hover & active (dragging) */
+*::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, var(--scrollbar-thumb-hover-start), var(--scrollbar-thumb-hover-end));
+  transform: translateY(-1px);
+  box-shadow: 0 8px 28px rgba(43,110,246,0.12);
+}
+
+*::-webkit-scrollbar-thumb:active {
+  transform: translateY(0);
+  box-shadow: 0 6px 22px rgba(43,110,246,0.16);
+}
+
+/* Tiny track highlight to indicate area */
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ----- Targeted containers: make chat scrollbars thinner and subtler ----- */
+.messages-wrap::-webkit-scrollbar,
+.conversations-list::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.messages-wrap::-webkit-scrollbar-track,
+.conversations-list::-webkit-scrollbar-track {
+  background: rgba(255,255,255,0.00); /* almost invisible track inside chat panels */
+  border-radius: 10px;
+}
+
+.messages-wrap::-webkit-scrollbar-thumb,
+.conversations-list::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  box-shadow: none;
+  opacity: 0.75;
+  transition: opacity 140ms ease, transform 120ms ease, background 120ms ease;
+}
+
+.messages-wrap::-webkit-scrollbar-thumb,
+.conversations-list::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.06));
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
+/* Focus-visible for keyboard users */
+.messages-wrap:focus-visible::-webkit-scrollbar-thumb,
+.conversations-list:focus-visible::-webkit-scrollbar-thumb {
+  outline: 2px solid rgba(43,110,246,0.18);
+  outline-offset: 2px;
+}
+
+/* ----- Firefox: use scrollbar-color and width ----- */
+* {
+  scrollbar-width: thin; /* options: auto | thin | none */
+  scrollbar-color: var(--scrollbar-thumb-grad-start) transparent;
+}
+
+/* More specific for Firefox (target containers) */
+.messages-wrap,
+.conversations-list {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.12) rgba(255,255,255,0.02);
+}
+
+/* Firefox "hover" can't be styled via pseudo elements — use subtle container hover to change appearance */
+.messages-wrap:hover,
+.conversations-list:hover {
+  /* optionally increase visibility on hover by changing CSS variable */
+  --ff-scroll-thumb: rgba(255,255,255,0.16);
+}
+
+/* ----- Responsive: thinner scrollbars on small screens ----- */
+@media (max-width: 720px) {
+  :root { --scrollbar-width: 8px; }
+  .messages-wrap::-webkit-scrollbar,
+  .conversations-list::-webkit-scrollbar { width: 8px; height: 8px; }
+}
+
+/* ----- Touch devices: hide native scrollbars for nicer look (still scrolls) ----- */
+@media (hover: none) and (pointer: coarse) {
+  *::-webkit-scrollbar { display: none; }
+  * { scrollbar-width: none; }
+}
+
+@import './styles/dark-scrollbar.css';

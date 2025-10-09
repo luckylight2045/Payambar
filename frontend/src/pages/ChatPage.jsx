@@ -1,6 +1,6 @@
 /* eslint-disable no-empty */
 /* eslint-disable no-unused-vars */
-// src/pages/ChatPage.jsx
+/* src/pages/ChatPage.jsx */
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import useAuth from '../hooks/useAuth';
 import useSocket from '../hooks/useSocket';
@@ -20,46 +20,17 @@ import {
   formatConversationTime,
 } from '../utils/chatUtils';
 
-export default function ChatPage() {
-  const css = `
-:root{
-  --bg:#071019;
-  --bg-2:#0b1220;
-  --sidebar-bg:#071720;
-  --panel:#091421;
-  --muted:#9aa8b8;
-  --muted-2:#7f8b98;
-  --text:#e6eef6;
-  --accent:#2b6ef6;
-  --bubble-other:#0f2936;
-  --bubble-other-border: rgba(255,255,255,0.03);
-  --bubble-mine: linear-gradient(180deg,#2b6ef6,#1e4fd8);
-  --input-bg: rgba(255,255,255,0.03);
-  --input-border: rgba(255,255,255,0.06);
-  --placeholder: rgba(255,255,255,0.40);
-  --online: #2b9cff;
-}
-html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", Arial, sans-serif; background:var(--bg); color:var(--text); }
-.app-container { height:100vh; display:flex; gap:0; overflow:hidden; }
-.sidebar { width:320px; min-width:260px; background: linear-gradient(180deg, var(--sidebar-bg), #051218); border-right: 1px solid rgba(255,255,255,0.04); padding:18px; box-sizing:border-box; display:flex; flex-direction:column; }
-.sidebar .title { font-size:22px; font-weight:700; margin-bottom:12px; color:var(--text); }
-.conversations-list { margin-top:6px; overflow-y:auto; padding-right:6px; flex:1; }
-.conv-item { display:flex; gap:12px; align-items:center; padding:10px; border-radius:10px; cursor:pointer; transition: background .12s ease, transform .06s ease; color:var(--text); }
-.conv-item:hover { background: rgba(255,255,255,0.02); transform: translateY(-1px); }
-.conv-item.selected { background: rgba(255,255,255,0.03); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02); }
-.conv-avatar{ position:relative; width:44px; height:44px; border-radius:50%; background:linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.08)); display:flex; align-items:center; justify-content:center; color:var(--text); font-weight:700; font-size:14px; flex-shrink:0; }
-.conv-avatar .online-badge { position:absolute; right:-2px; bottom:-2px; width:12px; height:12px; border-radius:6px; border: 2px solid #071019; background: var(--online); box-shadow: 0 0 6px rgba(43,156,255,0.4); }
-.conv-meta { display:flex; flex-direction:column; gap:4px; min-width:0; flex:1; overflow:hidden; }
-.conv-top { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
-.conv-username { font-weight:700; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:165px; }
-.conv-last { font-size:13px; color:var(--muted-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:220px; }
-.conv-time { font-size:12px; color:var(--muted); white-space:nowrap; margin-left:6px; }
-.chat-main { flex:1; display:flex; flex-direction:column; background: var(--bg-2); overflow:hidden; }
-.connecting-banner { background: rgba(255,255,255,0.03); padding:8px 12px; text-align:center; color: var(--muted); font-size:13px; border-bottom: 1px solid rgba(255,255,255,0.02); }
-.messages-wrap { padding:18px; overflow-y:auto; display:flex; flex-direction:column; gap:12px; height:100%; }
-.empty-state { height:100%; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:16px; }
-`;
+/*
+  CHANGES:
+   - Removed inline CSS string and <style> injection.
+   - Imported styles from ../styles/dark.css
+   - Added class "chat-scrollbar" to the two scroll containers:
+       .conversations-list and .messages-wrap
+*/
 
+import '../styles/dark.css';
+
+export default function ChatPage() {
   const { token, user } = useAuth();
   const socketRef = useSocket({ token });
 
@@ -1242,54 +1213,50 @@ html,body,#root { height:100%; margin:0; font-family: Inter, "Helvetica Neue", A
   }, [token]);
 
   // --- Add this useEffect to proactively load block-status for the currently active conversation's other user ---
-// --- Add this useEffect to proactively load block-status for the currently active conversation's other user ---
-useEffect(() => {
-  let mounted = true;
+  useEffect(() => {
+    let mounted = true;
 
-  try {
-    let otherId = null;
+    try {
+      let otherId = null;
 
-    // draft: prioritize draftConversation if activeConvId is a draft
-    if (String(activeConvId || '').startsWith('draft:') && draftConversation) {
-      otherId = String(draftConversation.userId);
-    } else {
-      // prefer loadedConvId (messages loaded), otherwise activeConvId
-      const convObj = (conversations || []).find((c) => String(c._id ?? c.id ?? '') === String(loadedConvId || activeConvId || ''));
-      otherId = getOtherUserIdFromConv(convObj);
+      // draft: prioritize draftConversation if activeConvId is a draft
+      if (String(activeConvId || '').startsWith('draft:') && draftConversation) {
+        otherId = String(draftConversation.userId);
+      } else {
+        // prefer loadedConvId (messages loaded), otherwise activeConvId
+        const convObj = (conversations || []).find((c) => String(c._id ?? c.id ?? '') === String(loadedConvId || activeConvId || ''));
+        otherId = getOtherUserIdFromConv(convObj);
+      }
+
+      if (!otherId || !token) return;
+
+      // fetch block status for this other user and update blockedMap
+      axios.get(`http://localhost:3000/users/block/status/${encodeURIComponent(otherId)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      .then((res) => {
+        if (!mounted) return;
+        const data = res?.data ?? {};
+        setBlockedMap((prev) => ({
+          ...(prev || {}),
+          [String(otherId)]: {
+            ...(prev?.[String(otherId)] || {}),
+            blockedByMe: !!data.blockedByMe,
+            blockedByThem: !!data.blockedByThem,
+          },
+        }));
+      })
+      .catch(() => {
+        // ignore fetch errors — fallback to whatever we have locally
+      });
+    } catch (e) {
+      // swallow
     }
 
-    if (!otherId || !token) return;
-
-    // fetch block status for this other user and update blockedMap
-    axios.get(`http://localhost:3000/users/block/status/${encodeURIComponent(otherId)}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    .then((res) => {
-      if (!mounted) return;
-      const data = res?.data ?? {};
-      setBlockedMap((prev) => ({
-        ...(prev || {}),
-        [String(otherId)]: {
-          ...(prev?.[String(otherId)] || {}),
-          blockedByMe: !!data.blockedByMe,
-          blockedByThem: !!data.blockedByThem,
-        },
-      }));
-    })
-    .catch(() => {
-      // ignore fetch errors — fallback to whatever we have locally
-    });
-  } catch (e) {
-    // swallow
-  }
-
-  return () => {
-    mounted = false;
-  };
-  // include getOtherUserIdFromConv to satisfy hook deps
-}, [activeConvId, loadedConvId, draftConversation, conversations, token, getOtherUserIdFromConv]);
-
-
+    return () => {
+      mounted = false;
+    };
+  }, [activeConvId, loadedConvId, draftConversation, conversations, token, getOtherUserIdFromConv]);
 
   const handleBlockUser = async (otherUserId, currentlyBlockedByMe = false) => {
     if (!otherUserId) {
@@ -1347,15 +1314,13 @@ useEffect(() => {
 
   return (
     <div className="app-container">
-      <style id="chat-page-inline-styles" dangerouslySetInnerHTML={{ __html: css }} />
-
       <div className="sidebar">
         <div className="title">Chats</div>
 
         <ChatForm onConversationStart={handleConversationStart} conversations={conversations} setConversations={setConversations} currentUserId={currentUserId} />
 
         <h3 style={{ color: 'var(--muted)', marginTop: 8 }}>Known Conversations</h3>
-        <div className="conversations-list">
+        <div className="conversations-list chat-scrollbar">
           {conversations.length === 0 ? (
             <div style={{ padding: 12, color: 'var(--muted)' }}>No conversations yet — start a new chat or search.</div>
           ) : null}
@@ -1409,32 +1374,32 @@ useEffect(() => {
       <div className="chat-main">
         {showConnecting ? <div className="connecting-banner">Connecting…</div> : null}
         {/* chat header showing other participant name + last seen */}
-<div style={{ padding: '12px 18px', borderBottom: '1px solid rgba(255,255,255,0.03)', display: 'flex', flexDirection: 'column', gap: 4 }}>
-  <div style={{ fontWeight: 700, fontSize: 16 }}>
-    {(() => {
-      const convObj = (conversations || []).find((c) => String(c._id ?? c.id ?? '') === String(loadedConvId || activeConvId || ''));
-      const otherName = convObj ? (convObj.name || getOtherNameForConversation(convObj)) : '';
-      return otherName || 'Unknown';
-    })()}
-  </div>
-  <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-    {(() => {
-      // compute the other user id for header display
-      let otherId = null;
-      if (String(activeConvId || '').startsWith('draft:') && draftConversation) {
-        otherId = String(draftConversation.userId);
-      } else {
-        const convObj = (conversations || []).find((c) => String(c._id ?? c.id ?? '') === String(loadedConvId || activeConvId || ''));
-        otherId = getOtherUserIdFromConv(convObj);
-      }
-      if (!otherId) return '';
-      const meta = participantMeta[String(otherId)] || {};
-      return formatLastSeenText(meta);
-    })()}
-  </div>
-</div>
+        <div style={{ padding: '12px 18px', borderBottom: '1px solid rgba(255,255,255,0.03)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>
+            {(() => {
+              const convObj = (conversations || []).find((c) => String(c._id ?? c.id ?? '') === String(loadedConvId || activeConvId || ''));
+              const otherName = convObj ? (convObj.name || getOtherNameForConversation(convObj)) : '';
+              return otherName || 'Unknown';
+            })()}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+            {(() => {
+              // compute the other user id for header display
+              let otherId = null;
+              if (String(activeConvId || '').startsWith('draft:') && draftConversation) {
+                otherId = String(draftConversation.userId);
+              } else {
+                const convObj = (conversations || []).find((c) => String(c._id ?? c.id ?? '') === String(loadedConvId || activeConvId || ''));
+                otherId = getOtherUserIdFromConv(convObj);
+              }
+              if (!otherId) return '';
+              const meta = participantMeta[String(otherId)] || {};
+              return formatLastSeenText(meta);
+            })()}
+          </div>
+        </div>
 
-        <div className="messages-wrap" id="messages-wrap" ref={messagesWrapRef}>
+        <div className="messages-wrap chat-scrollbar" id="messages-wrap" ref={messagesWrapRef}>
           {loadedConvId ? (
             <MessageList
               messages={messages}
@@ -1495,25 +1460,23 @@ useEffect(() => {
           </div>
         ) : null}
       </div>
-     
 
       <ContextMenu
-  visible={ctxVisible}
-  x={ctxX}
-  y={ctxY}
-  isDraft={ctxTargetConv ? String((ctxTargetConv._id ?? ctxTargetConv.id ?? '')).startsWith('draft:') : false}
-  onClose={closeContextMenu}
-  onClearHistory={handleClearHistory}
-  onDeleteConversation={handleDeleteConversation}
-  // ContextMenu will call onBlockUser(otherUserId, blockedByMe)
-  onBlockUser={async (otherUserId, currentlyBlockedByMe) => {
-    await handleBlockUser(otherUserId, currentlyBlockedByMe);
-    closeContextMenu();
-  }}
-  otherUserId={ctxOtherUserId}
-  blockState={ctxOtherUserId ? (blockedMap[String(ctxOtherUserId)] || {}) : {}}
-/>
-
+        visible={ctxVisible}
+        x={ctxX}
+        y={ctxY}
+        isDraft={ctxTargetConv ? String((ctxTargetConv._id ?? ctxTargetConv.id ?? '')).startsWith('draft:') : false}
+        onClose={closeContextMenu}
+        onClearHistory={handleClearHistory}
+        onDeleteConversation={handleDeleteConversation}
+        // ContextMenu will call onBlockUser(otherUserId, blockedByMe)
+        onBlockUser={async (otherUserId, currentlyBlockedByMe) => {
+          await handleBlockUser(otherUserId, currentlyBlockedByMe);
+          closeContextMenu();
+        }}
+        otherUserId={ctxOtherUserId}
+        blockState={ctxOtherUserId ? (blockedMap[String(ctxOtherUserId)] || {}) : {}}
+      />
     </div>
   );
 }
