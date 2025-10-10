@@ -38,6 +38,9 @@ export class Message {
   @Prop({ default: false })
   isEdited: boolean;
 
+  @Prop({ type: Types.ObjectId, ref: 'Message', default: null })
+  replyTo: Types.ObjectId;
+
   @Prop({ default: Date.now, timestamp: true })
   createdAt: Date;
 

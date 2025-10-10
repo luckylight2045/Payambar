@@ -22,9 +22,9 @@ export default function MessageList({
   messages = [],
   currentUserId,
   participantNameMap = {},
-  currentUserName,
   onDeleteMessage,
   onEditMessage,
+  onReply,
 }) {
   const seenKeysRef = useRef(new Set());
   const [newKeys, setNewKeys] = useState(new Set());
@@ -426,6 +426,7 @@ export default function MessageList({
             return (
               <div
                 key={key}
+                data-msg-id={m._id ?? m.id ?? key}
                 className={`message ${mine ? 'mine' : 'theirs'} ${isNew ? 'msg-new' : ''}`}
                 style={{ marginBottom: 8, display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}
                 onContextMenu={(e) => openMessageContextMenu(e, m)}
@@ -435,6 +436,45 @@ export default function MessageList({
                   <span style={{ color: '#6b7280', fontSize: 11 }}>{m.createdAt ? formatTime(m.createdAt) : ''}</span>
                 </div>
 
+                {m.replyTo ? (
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'flex-start',
+                      background: 'rgba(255,255,255,0.02)',
+                      borderRadius: 8,
+                      padding: '6px 8px',
+                      marginBottom: 8,
+                      borderLeft: '4px solid #ff4d8a',
+                      maxWidth: '70%',
+                      cursor: 'pointer',
+                      overflow: 'hidden'
+                    }}
+                    title={m.replyTo.content ?? ''}
+                    onClick={() => {
+                      // optional: when user clicks the snippet you could focus the input or scroll to original message
+                      try { onReply && onReply(m.replyTo); } catch (e) { /* swallow */ }
+                    }}
+                  >
+                    <div style={{ minWidth: 72, flexShrink: 0, fontSize: 12, fontWeight: 700, color: 'inherit' }}>
+                      {(
+                        (m.replyTo.senderName)
+                          ?? (m.replyTo.senderId && typeof m.replyTo.senderId === 'object'
+                                ? (m.replyTo.senderId.name || m.replyTo.senderId.username || m.replyTo.senderId.userName)
+                                : (m.replyTo.senderId || 'Unknown'))
+                      )}
+                    </div>
+
+                    <div style={{ fontSize: 13, color: '#9aa8b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                      {String(m.replyTo.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 200)}
+                      {(m.replyTo.content && String(m.replyTo.content).length > 200) ? '…' : ''}
+                    </div>
+                  </div>
+                ) : null}
+
+
+                {/* --- Message bubble --- */}
                 <div
                   className="body"
                   style={{
@@ -476,9 +516,21 @@ export default function MessageList({
         </div>
       ))}
 
-      {/* Message context menu */}
       {ctxVisible && ctxTargetMessage ? (
         <div style={menuStyle} role="menu" aria-hidden={!ctxVisible} ref={menuRef}>
+          {/* Reply action available for both mine and theirs */}
+          <div
+            style={menuItemStyle}
+            onClick={() => {
+              try { onReply && onReply(ctxTargetMessage); } catch (e) { /* swallow */ }
+              closeMessageContextMenu();
+            }}
+          >
+            💬 Reply
+          </div>
+
+          <div style={{ height: 6 }} />
+
           {isMessageMine(ctxTargetMessage.senderId) ? (
             <>
               <div style={menuItemStyle} onClick={() => onRequestEdit()}>✏️ Edit message</div>
@@ -487,13 +539,15 @@ export default function MessageList({
             </>
           ) : (
             <>
-              <div style={{ ...menuItemStyle, color: '#9aa8b8' }}>No actions available</div>
+              <div style={{ ...menuItemStyle, color: '#9aa8b8' }}>No other actions</div>
             </>
           )}
+
           <div style={{ height: 6 }} />
           <div style={{ ...menuItemStyle, color: '#9aa8b8' }} onClick={() => closeMessageContextMenu()}>Close</div>
         </div>
       ) : null}
+
 
       {/* Confirm delete popup (two-step) */}
       {confirmVisible && ctxTargetMessage ? (
@@ -516,4 +570,5 @@ MessageList.propTypes = {
   currentUserName: PropTypes.string,
   onDeleteMessage: PropTypes.func,
   onEditMessage: PropTypes.func,
+  onReply: PropTypes.func,
 };

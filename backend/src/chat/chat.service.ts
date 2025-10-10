@@ -51,6 +51,7 @@ export class ChatService {
         content,
         senderId,
         conversationId,
+        replyTo: data.replyTo ?? undefined,
       });
 
       await updateConvLastMessage(
@@ -67,7 +68,6 @@ export class ChatService {
       );
     }
 
-    console.log('life is great');
     const participants = [
       ...new Set([senderId, ...participantIds.map(String)]),
     ];

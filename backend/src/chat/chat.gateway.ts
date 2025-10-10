@@ -551,6 +551,7 @@ export class ChatGateway
           content: data.content,
           senderId,
           conversationId: data.conversationId,
+          replyTo: data.replyTo ?? undefined,
         });
       } else {
         const participantIdsToCreate =

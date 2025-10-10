@@ -22,8 +22,9 @@ export class MessageService {
       senderId: data.senderId,
       content: data.content,
       messageType: data.messageType || MessageType.TEXT,
+      replyTo: data.replyTo ? new Types.ObjectId(String(data.replyTo)) : null,
     });
-    return message.save();
+    return await message.save();
   }
 
   async getMessagesForConversation(
@@ -48,7 +49,14 @@ export class MessageService {
     let query = this.message
       .find(filter)
       .sort({ createdAt: -1 })
-      .populate({ path: 'senderId', select: 'name' });
+      .populate([
+        { path: 'senderId', select: '_id username name' },
+        {
+          path: 'replyTo',
+          populate: { path: 'senderId', select: '_id username name' },
+        },
+      ])
+      .lean();
 
     if (!options.beforeDate && options.skip !== undefined) {
       query = query.skip(options.skip);

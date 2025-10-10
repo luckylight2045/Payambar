@@ -37,6 +37,7 @@ export default function ChatPage() {
   const { conversations, setConversations, refresh, deleteConversation, clearHistory } = useConversations(token);
 
   const [messages, setMessages] = useState([]);
+  const [replyTarget, setReplyTarget] = useState(null);
   const [participantNameMap, setParticipantNameMap] = useState({});
   const [draftConversation, setDraftConversation] = useState(null);
   const [participantMeta, setParticipantMeta] = useState({});
@@ -703,13 +704,14 @@ export default function ChatPage() {
     return () => el.removeEventListener('scroll', onScroll);
   }, [loadedConvId, messages, emitMessagesReceivedForConversation, currentUserId]);
 
-  const sendMessage = async (content) => {
+  const sendMessage = async (content, opts = {}) => {
+    const replyToId = opts?.replyTo ?? null;
     if (!content || !content.trim()) return;
     const s = socketRef.current;
 
     if (loadedConvId) {
       if (!s || !s.connected) { alert('Socket not connected'); return; }
-      s.emit('send_message', { conversationId: loadedConvId, content, messageType: 'text' });
+      s.emit('send_message', { conversationId: loadedConvId, content, messageType: 'text', replyTo: replyToId });
       return;
     }
 
@@ -762,7 +764,7 @@ export default function ChatPage() {
         if (String(otherId) === String(currentUserId)) {
           try {
             const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}/messages`, {
-              content, messageType: 'text',
+              content, messageType: 'text', replyTo: replyToId,
             }, { headers: { Authorization: `Bearer ${token}` } });
             const saved = res.data;
             const convId = saved.conversationId ?? saved.conversation?._id ?? saved._id ?? null;
@@ -796,14 +798,14 @@ export default function ChatPage() {
             return;
           }
         } else {
-          s.emit('send_message', { participantIds: [otherId], content, messageType: 'text' });
+          s.emit('send_message', { participantIds: [otherId], content, messageType: 'text', replyTo: replyToId });
           return;
         }
       }
 
       try {
         const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}/messages`, {
-          content, messageType: 'text',
+          content, messageType: 'text', replyTo: replyToId,
         }, { headers: { Authorization: `Bearer ${token}` } });
         const saved = res.data;
         const convId = saved.conversationId ?? saved.conversation?._id ?? saved._id ?? null;
@@ -1119,6 +1121,23 @@ export default function ChatPage() {
     }
   };
 
+  const onMessageReplyRequest = (message) => {
+    if (!message) return;
+    const id = message._id ?? message.id ?? null;
+    const content = message.content ?? '';
+    let senderName = null;
+    if (typeof message.senderId === 'object') {
+      senderName = message.senderId.name ?? message.senderId.userName ?? message.senderId.username ?? null;
+    }
+    if (!senderName) {
+      const sid = utilParticipantId(message.senderId) ?? (message.senderId && String(message.senderId));
+      if (sid && participantNameMap[sid]) senderName = participantNameMap[sid];
+    }
+    if (!senderName) senderName = 'Unknown';
+  
+    setReplyTarget({ id, content, senderId: utilParticipantId(message.senderId) ?? (message.senderId && String(message.senderId)), senderName });
+  };
+
   const handleEditMessage = async (messageId, newContent) => {
     if (!messageId) return { ok: false, error: 'no id' };
     if (!newContent || String(newContent).trim().length === 0) {
@@ -1340,6 +1359,7 @@ export default function ChatPage() {
                   key={convId}
                   className={`conv-item ${isSelected ? 'selected' : ''}`}
                   onClick={() => {
+                    setReplyTarget(null);
                     if (isDraft) {
                       const userId = String(convId).replace(/^draft:/, '');
                       handleConversationStart({ draft: true, userId, userName: otherName });
@@ -1408,6 +1428,7 @@ export default function ChatPage() {
               currentUserName={currentUserName}
               onDeleteMessage={handleDeleteMessage}
               onEditMessage={handleEditMessage}
+              onReply={onMessageReplyRequest}
             />
           ) : activeConvId && String(activeConvId).startsWith('draft:') ? (
             <>
@@ -1425,6 +1446,7 @@ export default function ChatPage() {
                 currentUserName={currentUserName}
                 onDeleteMessage={handleDeleteMessage}
                 onEditMessage={handleEditMessage}
+                onReply={onMessageReplyRequest}
               />
             </>
           ) : (
@@ -1455,7 +1477,7 @@ export default function ChatPage() {
               if (status.blockedByThem) {
                 return <div style={{ color: 'var(--muted)', padding: 8 }}>You've been blocked by the user</div>;
               }
-              return <MessageInput sendMessage={sendMessage} conversationId={loadedConvId || (draftConversation ? `draft:${draftConversation.userId}` : (activeConvId || ''))} socketRef={socketRef} />;
+              return <MessageInput sendMessage={sendMessage} conversationId={loadedConvId || (draftConversation ? `draft:${draftConversation.userId}` : (activeConvId || ''))} socketRef={socketRef} replyTarget={replyTarget} onCancelReply={() => setReplyTarget(null)} />;
             })()}
           </div>
         ) : null}
