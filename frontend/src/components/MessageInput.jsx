@@ -23,6 +23,7 @@ export default function MessageInput({
   const [value, setValue] = useState('');
   const typingRef = useRef(false);
   const idleTimer = useRef(null);
+  const textareaRef = useRef(null);
   const IDLE_TIMEOUT_MS = 1500;
 
   // derived reply info
@@ -225,25 +226,27 @@ export default function MessageInput({
           <PaperclipIcon />
         </button>
 
-        {/* Input */}
-        <input
-          value={value}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          placeholder={placeholder}
-          style={{
-            flex: 1,
-            padding: '10px 12px',
-            borderRadius: 12,
-            border: '1px solid rgba(255,255,255,0.04)',
-            background: 'rgba(255,255,255,0.02)',
-            color: 'inherit',
-            outline: 'none',
-            minHeight: 40,
-            boxSizing: 'border-box',
-          }}
-          aria-label="Message input"
-        />
+        <textarea
+  ref={textareaRef}
+  value={value}
+  onChange={handleChange}
+  onKeyDown={handleKeyDown}
+  placeholder={placeholder}
+  rows={2}
+  style={{
+    flex: 1,
+    padding: '10px 12px',
+    borderRadius: 12,
+    border: '1px solid rgba(255,255,255,0.04)',
+    background: 'rgba(255,255,255,0.02)',
+    color: 'inherit',
+    outline: 'none',
+    minHeight: 40,
+    boxSizing: 'border-box',
+    resize: 'vertical' // allow the user to manually resize if desired
+  }}
+  aria-label="Message input"
+/>
 
         {/* Emoji / Send group */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
