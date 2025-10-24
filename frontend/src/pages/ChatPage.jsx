@@ -704,136 +704,192 @@ export default function ChatPage() {
     return () => el.removeEventListener('scroll', onScroll);
   }, [loadedConvId, messages, emitMessagesReceivedForConversation, currentUserId]);
 
-  const sendMessage = async (content, opts = {}) => {
-    const replyToId = opts?.replyTo ?? null;
-    if (!content || !content.trim()) return;
-    const s = socketRef.current;
+const sendMessage = async (content, opts = {}) => {
+  const replyTo = opts.replyTo ?? null;
+  const messageType = opts.messageType ?? 'text'; // 'text' | 'image' | 'video' | 'file'
+  const originalName = opts.originalName ?? null;
+  const attachmentKey = opts.attachmentKey ?? null;
+  const publicUrl = opts.publicUrl ?? null;
 
-    if (loadedConvId) {
-      if (!s || !s.connected) { alert('Socket not connected'); return; }
-      s.emit('send_message', { conversationId: loadedConvId, content, messageType: 'text', replyTo: replyToId });
-      return;
-    }
+  if (!((content && String(content).trim()) || attachmentKey || publicUrl)) return;
+  const s = socketRef.current;
 
-    if (activeConvId && String(activeConvId).startsWith('draft:') && draftConversation) {
-      const otherId = draftConversation.userId;
-      if (!otherId) return;
-
-      const tempId = `temp:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
-      const pendingId = `pending:${otherId}`;
-      const tempMsg = {
-        _id: tempId,
+  // CASE A: existing conversation loaded -> emit over socket
+  if (loadedConvId) {
+    if (!s || !s.connected) { alert('Socket not connected'); return; }
+    try {
+      s.emit('send_message', {
+        conversationId: loadedConvId,
         content,
-        senderId: currentUserId,
-        conversationId: pendingId,
-        participants: [
-          { _id: currentUserId, name: currentUserName },
-          ...(String(otherId) === String(currentUserId) ? [] : [{ _id: otherId, name: draftConversation.userName }]),
-        ],
-        createdAt: new Date().toISOString(),
-        deliveredTo: [],
-        isLocal: true,
-      };
-
-      setMessages((prev) => [...(prev || []), tempMsg]);
-
-      setConversations((prev) => {
-        const cleaned = removeAllDraftsFromList(prev || []);
-        const exists = (cleaned || []).some((c) => String(c._id) === pendingId || (Array.isArray(c.participants) && c.participants.some((p) => String(utilParticipantId(p) ?? p) === String(otherId))));
-        if (exists) return cleaned;
-        return [
-          ...(cleaned || []),
-          {
-            _id: pendingId,
-            participants: (String(otherId) === String(currentUserId))
-              ? [{ _id: currentUserId, name: currentUserName }]
-              : [
-                  { _id: currentUserId, name: currentUserName },
-                  { _id: otherId, name: draftConversation.userName },
-                ],
-            name: String(otherId) === String(currentUserId) ? 'SavedMessages' : draftConversation.userName,
-            lastMessage: tempMsg,
-            updatedAt: new Date().toISOString(),
-          },
-        ];
+        messageType,
+        replyTo,           // include replyTo if provided
+        attachmentKey,     // optional key (backend can store)
+        originalName, 
+        publicUrl,
       });
+    } catch (err) {
+      console.error('[ChatPage] socket send failed', err);
+      alert('Failed to send message');
+    }
+    return;
+  }
 
-      setActiveConvId(pendingId);
+  // CASE B: sending when activeConvId is a draft (frontend-only) -> create pending/temp message and try to create conversation + send
+  if (activeConvId && String(activeConvId).startsWith('draft:') && draftConversation) {
+    const otherId = draftConversation.userId;
+    if (!otherId) return;
 
-      if (s && s.connected) {
+    // create temporary local message
+    const tempId = `temp:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+    const pendingId = `pending:${otherId}`;
+    const tempMsg = {
+      _id: tempId,
+      content,
+      senderId: currentUserId,
+      conversationId: pendingId,
+      participants: [
+        { _id: currentUserId, name: currentUserName },
+        ...(String(otherId) === String(currentUserId) ? [] : [{ _id: otherId, name: draftConversation.userName }]),
+      ],
+      createdAt: new Date().toISOString(),
+      deliveredTo: [],
+      isLocal: true,
+      messageType,
+      replyTo,
+      attachmentKey,
+      originalName,
+      publicUrl,
+    };
+
+    // add temp message to view
+    setMessages((prev) => [...(prev || []), tempMsg]);
+
+    // ensure pending conversation appears in list
+    setConversations((prev) => {
+      const cleaned = removeAllDraftsFromList(prev || []);
+      const exists = (cleaned || []).some((c) => String(c._id) === pendingId || (Array.isArray(c.participants) && c.participants.some((p) => String(utilParticipantId(p) ?? p) === String(otherId))));
+      if (exists) return cleaned;
+      return [
+        ...(cleaned || []),
+        {
+          _id: pendingId,
+          participants: (String(otherId) === String(currentUserId))
+            ? [{ _id: currentUserId, name: currentUserName }]
+            : [
+                { _id: currentUserId, name: currentUserName },
+                { _id: otherId, name: draftConversation.userName },
+              ],
+          name: String(otherId) === String(currentUserId) ? 'SavedMessages' : draftConversation.userName,
+          lastMessage: tempMsg,
+          updatedAt: new Date().toISOString(),
+        },
+      ];
+    });
+
+    setActiveConvId(pendingId);
+
+    // If socket connected and otherId !== self, try to use socket to send (fast path)
+    if (s && s.connected) {
+      try {
         if (String(otherId) === String(currentUserId)) {
-          try {
-            const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}/messages`, {
-              content, messageType: 'text', replyTo: replyToId,
-            }, { headers: { Authorization: `Bearer ${token}` } });
-            const saved = res.data;
-            const convId = saved.conversationId ?? saved.conversation?._id ?? saved._id ?? null;
-            if (convId) {
-              await refresh();
-              setDraftConversation(null);
-              setActiveConvId(convId);
-              await loadMessages(convId);
-            } else {
-              setMessages((prev) => {
-                const copy = (prev || []).slice();
-                const tidx = copy.findIndex((m) => m.isLocal && m._id === tempId);
-                if (tidx !== -1) {
-                  copy[tidx] = saved;
-                  return copy;
-                }
-                return [...copy, saved];
-              });
-            }
+          // saved messages -> fallback to HTTP
+          const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}/messages`, {
+            content,
+            messageType,
+            replyTo,
+            originalName,
+            attachmentKey,
+            publicUrl,
+          }, { headers: { Authorization: `Bearer ${token}` } });
+
+          const saved = res.data;
+          const convId = saved.conversationId ?? saved.conversation?._id ?? saved._id ?? null;
+          if (convId) {
+            await refresh();
+            setDraftConversation(null);
+            setActiveConvId(convId);
+            await loadMessages(convId);
             return;
-          } catch (err) {
-            console.error('[ChatPage] Failed to send initial self-message via HTTP', err?.response?.data ?? err?.message ?? err);
-            setMessages((prev) => (prev || []).filter((m) => !(m.isLocal && m._id === tempId)));
-            setConversations((prev) => (prev || []).filter((c) => String(c._id ?? c.id ?? '') !== pendingId));
-            if (String(activeConvId) === pendingId) {
-              setActiveConvId(null);
-              setLoadedConvId(null);
-              setDraftConversation(null);
-            }
-            alert('Failed to send message');
+          } else {
+            // replace temp message with server-sent message
+            setMessages((prev) => {
+              const copy = (prev || []).slice();
+              const tidx = copy.findIndex((m) => m.isLocal && m._id === tempId);
+              if (tidx !== -1) {
+                copy[tidx] = saved;
+                return copy;
+              }
+              return [...copy, saved];
+            });
             return;
           }
         } else {
-          s.emit('send_message', { participantIds: [otherId], content, messageType: 'text', replyTo: replyToId });
+          // normal private message via socket: include participantIds and metadata
+          s.emit('send_message', {
+            participantIds: [otherId],
+            content,
+            messageType,
+            replyTo,
+            originalName,
+            attachmentKey,
+            publicUrl,
+          });
           return;
         }
-      }
-
-      try {
-        const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}/messages`, {
-          content, messageType: 'text', replyTo: replyToId,
-        }, { headers: { Authorization: `Bearer ${token}` } });
-        const saved = res.data;
-        const convId = saved.conversationId ?? saved.conversation?._id ?? saved._id ?? null;
-        if (convId) {
-          await refresh();
-          setDraftConversation(null);
-          setActiveConvId(convId);
-          await loadMessages(convId);
-        } else {
-          setMessages((prev) => {
-            const copy = (prev || []).slice();
-            const tidx = copy.findIndex((m) => m.isLocal && m.content === content);
-            if (tidx !== -1) {
-              copy[tidx] = saved;
-              return copy;
-            }
-            return [...copy, saved];
-          });
-        }
       } catch (err) {
-        console.error('[ChatPage] Failed to send initial message', err && (err.message || err));
-        alert('Failed to send message');
+        console.error('[ChatPage] Failed to send initial message via socket/http', err);
+        // fallthrough to HTTP fallback below
       }
-      return;
     }
 
-    alert('No conversation selected');
-  };
+    // HTTP fallback for creating initial message/conversation (when socket not connected)
+    try {
+      const res = await axios.post(`http://localhost:3000/chats/private/${encodeURIComponent(otherId)}/messages`, {
+        content,
+        messageType,
+        replyTo,
+        originalName,
+        attachmentKey,
+        publicUrl,
+      }, { headers: { Authorization: `Bearer ${token}` } });
+
+      const saved = res.data;
+      const convId = saved.conversationId ?? saved.conversation?._id ?? saved._id ?? null;
+      if (convId) {
+        await refresh();
+        setDraftConversation(null);
+        setActiveConvId(convId);
+        await loadMessages(convId);
+      } else {
+        setMessages((prev) => {
+          const copy = (prev || []).slice();
+          const tidx = copy.findIndex((m) => m.isLocal && m.content === content);
+          if (tidx !== -1) {
+            copy[tidx] = saved;
+            return copy;
+          }
+          return [...copy, saved];
+        });
+      }
+    } catch (err) {
+      console.error('[ChatPage] Failed to send initial message (HTTP fallback)', err && (err.message || err));
+      // revert temp UI state
+      setMessages((prev) => (prev || []).filter((m) => !(m.isLocal && m._id === tempId)));
+      setConversations((prev) => (prev || []).filter((c) => String(c._id ?? c.id ?? '') !== pendingId));
+      if (String(activeConvId) === pendingId) {
+        setActiveConvId(null);
+        setLoadedConvId(null);
+        setDraftConversation(null);
+      }
+      alert('Failed to send message');
+    }
+    return;
+  }
+
+  // CASE C: nothing selected
+  alert('No conversation selected');
+};
+
 
   const refreshConversationsFromServer = async () => {
     if (!token) return null;

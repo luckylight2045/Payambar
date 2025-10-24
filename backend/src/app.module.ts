@@ -9,6 +9,7 @@ import { ChatModule } from './chat/chat.module';
 import { MessageModule } from './message/message.module';
 import { ConversationModule } from './conversation/conversation.module';
 import { RedisModule } from '@nestjs-modules/ioredis';
+import { PresignModule } from './uploads/presign.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { RedisModule } from '@nestjs-modules/ioredis';
     MessageModule,
     ConversationModule,
     ChatModule,
+    PresignModule,
     ConfigModule.forRoot({ isGlobal: true }),
     RedisModule.forRootAsync({
       imports: [ConfigModule],

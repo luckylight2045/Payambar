@@ -1,3 +1,4 @@
+/* eslint-disable no-empty */
 // src/components/MessageList.jsx
 /* eslint-disable no-unused-vars */
 import React, { useEffect, useRef, useState } from 'react';
@@ -17,7 +18,21 @@ import PropTypes from 'prop-types';
  *  - currentUserName: optional
  *  - onDeleteMessage(messageId, messageObj) => Promise (provided by parent)
  *  - onEditMessage(messageId, newContent) => Promise<{ok:true}|{ok:false,error}>
+ * 
  */
+
+
+const resolveAttachmentUrl = (m) => {
+  if (!m) return null;
+  if (m.publicUrl) return m.publicUrl;
+  if (m.attachmentUrl) return m.attachmentUrl;
+
+  const base = import.meta?.env?.VITE_UPLOAD_BASE ?? ''; // e.g. https://s3.ir-thr-at1.arvanstorage.ir/payambar
+  if (m.attachmentKey && base) {
+    return `${base.replace(/\/$/, '')}/${m.attachmentKey}`;
+  }
+  return null;
+};
 export default function MessageList({
   messages = [],
   currentUserId,
@@ -350,6 +365,22 @@ export default function MessageList({
     return { delivered, read, sent };
   };
 
+  const resolveAttachmentUrl = (m) => {
+    if (!m) return null;
+    if (m.publicUrl) return m.publicUrl;
+    if (m.attachmentUrl) return m.attachmentUrl;
+
+    const base =
+      import.meta?.env?.VITE_UPLOAD_BASE || ''; // e.g. https://s3.ir-thr-at1.arvanstorage.ir/payambar
+
+    if (m.attachmentKey && base) {
+      return `${base.replace(/\/$/, '')}/${m.attachmentKey}`;
+    }
+    return null;
+};
+
+
+
   // single tick SVG
   const SingleTickSvg = ({ className }) => (
     <svg className="tick-icon" viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg" aria-hidden>
@@ -475,27 +506,136 @@ export default function MessageList({
 
 
                 {/* --- Message bubble --- */}
-                <div
-                  className="body"
-                  style={{
-                    background: mine ? 'linear-gradient(180deg,#2b6ef6,#1e4fd8)' : '#0f2936',
-                    color: mine ? 'white' : 'var(--text, #e6eef6)',
-                    padding: '8px 12px',
-                    borderRadius: 8,
-                    maxWidth: '70%',
-                    wordBreak: 'break-word',
-                    boxShadow: isNew ? '0 10px 30px rgba(0,0,0,0.12)' : undefined,
-                    whiteSpace: 'pre-wrap',
-                  }}
-                >
-                  <div>{m.content}</div>
+                {/* --- Message bubble (image/video/file support) --- */}
+<div
+  className="body"
+  style={{
+    background: mine ? 'linear-gradient(180deg,#2b6ef6,#1e4fd8)' : '#0f2936',
+    color: mine ? 'white' : 'var(--text, #e6eef6)',
+    padding: '8px 12px',
+    borderRadius: 8,
+    maxWidth: '70%',
+    wordBreak: 'break-word',
+    boxShadow: isNew ? '0 10px 30px rgba(0,0,0,0.12)' : undefined,
+    whiteSpace: 'pre-wrap',
+  }}
+>
+  {/* Attachment preview (image/video) */}
+  {m.messageType === 'image' || (m.attachmentKey || m.publicUrl) ? (() => {
+    const url = resolveAttachmentUrl(m);
+    if (url && (m.messageType === 'image' || /\.(jpe?g|png|gif|webp|svg)(\?.*)?$/.test(url))) {
+      return (
+        <div style={{ marginBottom: (m.content ? 8 : 0) }}>
+          <img
+            src={url}
+            alt={m.content ?? 'image'}
+            style={{
+              display: 'block',
+              maxWidth: '100%',
+              maxHeight: 420,
+              borderRadius: 8,
+              objectFit: 'cover',
+            }}
+            loading="lazy"
+            onError={(e) => {
+              // show fallback text if img fails
+              try { e.currentTarget.style.display = 'none'; } catch {}
+            }}
+          />
+        </div>
+      );
+    }
+    // video fallback (if messageType === 'video' or url ends with common video ext)
+    if (url && (m.messageType === 'video' || /\.(mp4|webm|ogg)(\?.*)?$/.test(url))) {
+      return (
+        <div style={{ marginBottom: (m.content ? 8 : 0) }}>
+          <video
+            src={url}
+            controls
+            style={{ display: 'block', maxWidth: '100%', maxHeight: 480, borderRadius: 8 }}
+          />
+        </div>
+      );
+    }
+    // if message type set to 'image' but no url available, fallthrough to showing filename below
+    return null;
+  })() : null}
 
-                  {wasEdited ? (
-                    <div style={{ marginTop: 6, display: 'flex', justifyContent: 'flex-end' }}>
-                      <span className="edited-label">Edited</span>
-                    </div>
-                  ) : null}
-                </div>
+  {/* Caption / text content (for images or plain messages) */}
+{/* --- REPLACE WITH THIS --- */}
+{(() => {
+  const attUrl = resolveAttachmentUrl(m);
+  const type = (m.messageType || '').toLowerCase();
+
+  // Image detection by messageType or extension
+  if (
+    attUrl &&
+    (type === 'image' || /\.(jpe?g|png|gif|webp|bmp|avif)(\?.*)?$/i.test(attUrl))
+  ) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: 6 }}>
+        <img
+          src={attUrl}
+          alt={m.originalName ?? 'image'}
+          style={{
+            maxWidth: '100%',
+            width: '320px',
+            maxHeight: '420px',
+            objectFit: 'cover',
+            borderRadius: 12,
+            display: 'block',
+            boxShadow: '0 6px 20px rgba(0,0,0,0.35)',
+          }}
+          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+        />
+      </div>
+    );
+  }
+
+  // Video detection
+  if (
+    attUrl &&
+    (type === 'video' || /\.(mp4|webm|ogg)(\?.*)?$/i.test(attUrl))
+  ) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: 6 }}>
+        <video
+          src={attUrl}
+          controls
+          style={{
+            maxWidth: '100%',
+            width: '420px',
+            maxHeight: '420px',
+            borderRadius: 12,
+            display: 'block',
+            background: '#000',
+          }}
+        />
+      </div>
+    );
+  }
+
+  // Fallback: show text message
+  return (m.content ? <div style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>{m.content}</div> : null);
+})()}
+{/* --- end replacement --- */}
+
+
+  {/* If there's an attachment but it's not image/video, show a downloadable link */}
+  {m.messageType && m.messageType !== 'text' && m.messageType !== 'image' && m.messageType !== 'video' ? (() => {
+    const url = resolveAttachmentUrl(m);
+    if (url) {
+      return (
+        <div style={{ marginTop: 8 }}>
+          <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>
+            Download {m.originalName ?? (m.attachmentKey ?? 'file')}
+          </a>
+        </div>
+      );
+    }
+    return null;
+  })() : null}
+</div>
 
                 {mine ? (
                   <div style={{ width: '70%', display: 'flex', justifyContent: 'flex-end' }}>
