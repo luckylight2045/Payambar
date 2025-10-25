@@ -41,7 +41,7 @@ export class ConversationController {
     return conv;
   }
 
-  @Delete(':id')
+  @Delete('empty/:id')
   async deleteIfEmpty(
     @Param('id') id: string,
     @CurrentUser() user: HydratedDocument<User>,
@@ -51,6 +51,6 @@ export class ConversationController {
 
   @Delete(':id')
   async deleteConversation(@Param('id') conversationId: string) {
-    return await this.conversationService.deleteConversatiohn(conversationId);
+    return await this.conversationService.deleteConversation(conversationId);
   }
 }

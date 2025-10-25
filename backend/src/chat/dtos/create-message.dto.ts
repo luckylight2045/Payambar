@@ -22,4 +22,16 @@ export class CreateMessageDto {
   @IsOptional()
   @IsMongoId()
   replyTo?: string;
+
+  @IsOptional()
+  @IsString()
+  publicUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  attachMentKey?: string;
+
+  @IsOptional()
+  @IsString()
+  originalName?: string;
 }

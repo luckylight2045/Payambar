@@ -7,6 +7,7 @@ export enum MessageType {
   TEXT = 'text',
   FILE = 'file',
   IMAGE = 'image',
+  VIDEO = 'video',
 }
 
 @Schema({ timestamps: true })
@@ -40,6 +41,15 @@ export class Message {
 
   @Prop({ type: Types.ObjectId, ref: 'Message', default: null })
   replyTo: Types.ObjectId;
+
+  @Prop({ default: null })
+  attachMentKey: string;
+
+  @Prop({ default: null })
+  publicUrl: string;
+
+  @Prop({ default: null })
+  originalName: string;
 
   @Prop({ default: Date.now, timestamp: true })
   createdAt: Date;

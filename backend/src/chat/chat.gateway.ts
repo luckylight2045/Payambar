@@ -552,6 +552,9 @@ export class ChatGateway
           senderId,
           conversationId: data.conversationId,
           replyTo: data.replyTo ?? undefined,
+          publicUrl: data.publicUrl ?? undefined,
+          attachMentKey: data.attachMentKey ?? undefined,
+          originalName: data.originalName ?? undefined,
         });
       } else {
         const participantIdsToCreate =
@@ -563,6 +566,9 @@ export class ChatGateway
           content: data.content,
           senderId,
           participantIds: participantIdsToCreate,
+          publicUrl: data.publicUrl ?? undefined,
+          attachMentKey: data.attachMentKey ?? undefined,
+          originalName: data.originalName ?? undefined,
         });
       }
       const savedMessage = savedMessageRaw as SavedMessageLike;

@@ -50,6 +50,7 @@ export default function MessageList({
   const [ctxY, setCtxY] = useState(0);
   const [ctxTargetMessage, setCtxTargetMessage] = useState(null);
   const menuRef = useRef(null);
+  const confirmRef = useRef(null);
 
   // confirm delete popup state
   const [confirmVisible, setConfirmVisible] = useState(false);
@@ -190,15 +191,27 @@ export default function MessageList({
   useEffect(() => {
     const onDocDown = (ev) => {
       if (!ctxVisible) return;
-      const node = menuRef.current;
-      if (!node) {
+      // if right-click/contextmenu opened, let menu handle it (avoid closing immediately)
+      if (ev.button === 2) return;
+  
+      const menuNode = menuRef.current;
+      const confirmNode = confirmRef.current;
+  
+      // If neither node exists, just close
+      if (!menuNode && !confirmNode) {
         closeMessageContextMenu();
         return;
       }
-      if (!node.contains(ev.target)) {
+  
+      const target = ev.target;
+      const insideMenu = menuNode && menuNode.contains(target);
+      const insideConfirm = confirmNode && confirmNode.contains(target);
+  
+      if (!insideMenu && !insideConfirm) {
         closeMessageContextMenu();
       }
     };
+  
     window.addEventListener('mousedown', onDocDown);
     window.addEventListener('touchstart', onDocDown);
     return () => {
@@ -206,8 +219,6 @@ export default function MessageList({
       window.removeEventListener('touchstart', onDocDown);
     };
   }, [ctxVisible]);
-
-  // Delete flow
   const onRequestDelete = () => {
     setConfirmVisible(true);
   };
@@ -218,12 +229,17 @@ export default function MessageList({
       return;
     }
     const id = ctxTargetMessage._id ?? ctxTargetMessage.id;
+    console.log('[MessageList] confirmDelete -> messageId:', id, 'ctxTargetMessage:', ctxTargetMessage);
+  
     try {
       if (onDeleteMessage) {
         await onDeleteMessage(id, ctxTargetMessage);
+      } else {
+        // parent didn't provide a delete handler — remove menu and warn
+        console.warn('[MessageList] onDeleteMessage not provided by parent');
       }
     } catch (e) {
-      // parent will alert on error
+      console.error('[MessageList] onDeleteMessage threw', e && (e.message || e));
     } finally {
       closeMessageContextMenu();
     }
@@ -691,14 +707,39 @@ export default function MessageList({
 
       {/* Confirm delete popup (two-step) */}
       {confirmVisible && ctxTargetMessage ? (
-        <div style={confirmStyle}>
-          <div style={{ marginBottom: 8 }}>Are you sure you want to delete this message?</div>
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button onClick={() => { setConfirmVisible(false); closeMessageContextMenu(); }} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.04)', background: 'transparent', color: '#9aa8b8' }}>Cancel</button>
-            <button onClick={confirmDelete} style={{ padding: '6px 10px', borderRadius: 6, border: 'none', background: '#ff6b6b', color: '#fff' }}>Yes, delete</button>
-          </div>
-        </div>
-      ) : null}
+  <div style={confirmStyle} ref={confirmRef}>
+    <div style={{ marginBottom: 8 }}>Are you sure you want to delete this message?</div>
+    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+      <button
+        onClick={() => { setConfirmVisible(false); closeMessageContextMenu(); }}
+        style={{
+          padding: '6px 10px',
+          borderRadius: 6,
+          border: '1px solid rgba(255,255,255,0.04)',
+          background: 'transparent',
+          color: '#9aa8b8',
+          cursor: 'pointer', // explicit pointer
+        }}
+      >
+        Cancel
+      </button>
+      <button
+        onClick={confirmDelete}
+        style={{
+          padding: '6px 10px',
+          borderRadius: 6,
+          border: 'none',
+          background: '#ff6b6b',
+          color: '#fff',
+          cursor: 'pointer', // explicit pointer
+        }}
+      >
+        Yes, delete
+      </button>
+    </div>
+  </div>
+) : null}
+
     </div>
   );
 }

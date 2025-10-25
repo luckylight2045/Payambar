@@ -1141,38 +1141,61 @@ const sendMessage = async (content, opts = {}) => {
   };
 
   const handleDeleteMessage = async (messageId, messageObj) => {
-    if (!messageId) return;
-    if (!loadedConvId) {
+    if (!messageId) {
+      console.warn('[ChatPage] handleDeleteMessage called without messageId', { messageId, messageObj });
+      return;
+    }
+  
+    // If no conversation loaded or the message is a local temp message, remove locally
+    if (!loadedConvId || String(messageId).startsWith('temp:')) {
       setMessages((prev) => (prev || []).filter((m) => String(m._id ?? m.id ?? '') !== String(messageId)));
       return;
     }
-
+  
     try {
+      // debug log
+      console.log('[ChatPage] deleting message', { messageId, loadedConvId });
+  
+      // NEW route: DELETE /messages/:messageId
       const res = await axios.delete(
-        `http://localhost:3000/messages/${encodeURIComponent(messageId)}/${encodeURIComponent(loadedConvId)}`,
+        `http://localhost:3000/messages/${encodeURIComponent(messageId)}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      const deletedCount = res?.data?.deletedCount ?? (res?.data ? 1 : 0);
-
-      if (deletedCount > 0) {
-        setMessages((prev) => (prev || []).filter((m) => String(m._id ?? m.id ?? '') !== String(messageId)));
-
-        setConversations((prev) => (prev || []).map((c) => {
-          if (String(c._id ?? c.id ?? '') === String(loadedConvId)) {
-            const lm = c.lastMessage ?? c.lastMessageContent ?? null;
-            const lastMsgId = (typeof lm === 'object' && lm) ? (lm._id ?? lm.id ?? null) : (typeof lm === 'string' ? lm : null);
-            if (String(lastMsgId) === String(messageId)) {
-              return { ...c, lastMessage: null };
-            }
+      console.log('delete message')
+  
+      console.log('[ChatPage] delete response', res.status, res.data);
+  
+      // Remove from UI regardless of exact server response shape (keeps UI consistent)
+      setMessages((prev) => (prev || []).filter((m) => String(m._id ?? m.id ?? '') !== String(messageId)));
+  
+      // If this message was the conversation's lastMessage, clear it locally
+      setConversations((prev) => (prev || []).map((c) => {
+        if (String(c._id ?? c.id ?? '') === String(loadedConvId)) {
+          const lm = c.lastMessage ?? c.lastMessageContent ?? null;
+          const lastMsgId = (lm && typeof lm === 'object') ? (lm._id ?? lm.id ?? null) : (typeof lm === 'string' ? lm : null);
+          if (String(lastMsgId) === String(messageId)) {
+            return { ...c, lastMessage: null };
           }
-          return c;
-        }));
-      } else {
-        alert('No message removed');
-      }
+        }
+        return c;
+      }));
     } catch (err) {
       console.error('[ChatPage] delete message failed', err?.response?.data ?? err?.message ?? err);
+  
+      if (err?.response) {
+        const status = err.response.status;
+        if (status === 401) {
+          alert('Unauthorized — please log in again.');
+          return;
+        }
+        if (status === 404) {
+          setMessages((prev) => (prev || []).filter((m) => String(m._id ?? m.id ?? '') !== String(messageId)));
+          alert('Message not found on server; removed locally.');
+          return;
+        }
+      }
+  
       alert('Failed to delete message');
     }
   };

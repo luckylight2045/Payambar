@@ -77,10 +77,10 @@ export class MessageService {
       .exec();
   }
 
-  async deleteMessage(messageId: string, conversationId: string) {
+  async deleteMessage(messageId: string) {
+    console.log('delete message section');
     const isDeleted = await this.message.deleteOne({
       _id: messageId,
-      conversationId,
     });
 
     if (!isDeleted) {
@@ -219,5 +219,17 @@ export class MessageService {
     throw new Error(
       'No messageId/messageIds or conversationId+upToMessageId provided',
     );
+  }
+
+  async deleteMessages(conversationId: string) {
+    const isDeleted = await this.message.deleteMany({
+      conversationId: String(conversationId),
+    });
+
+    if (!isDeleted) {
+      throw new NotFoundException('no messages with the conversationId');
+    }
+
+    return isDeleted;
   }
 }

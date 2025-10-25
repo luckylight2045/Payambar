@@ -52,6 +52,9 @@ export class ChatService {
         senderId,
         conversationId,
         replyTo: data.replyTo ?? undefined,
+        attachMentKey: data.attachMentKey ?? undefined,
+        publicUrl: data.publicUrl ?? undefined,
+        originalName: data.originalName ?? undefined,
       });
 
       await updateConvLastMessage(
@@ -99,6 +102,9 @@ export class ChatService {
       content,
       senderId,
       conversationId: conv._id.toString(),
+      publicUrl: data.publicUrl ?? undefined,
+      attachMentKey: data.attachMentKey ?? undefined,
+      originalName: data.originalName ?? undefined,
     });
 
     await updateConvLastMessage(

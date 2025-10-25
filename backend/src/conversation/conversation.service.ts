@@ -154,17 +154,17 @@ export class ConversationService {
     return { deleted: true };
   }
 
-  async deleteConversatiohn(conversationId: string) {
-    const isDeleted = await this.conversation.deleteOne({
+  async deleteConversation(conversationId: string) {
+    await this.messageService.deleteMessages(conversationId);
+
+    const isDeletedConv = await this.conversation.deleteOne({
       _id: conversationId,
     });
 
-    if (!isDeleted) {
-      throw new NotFoundException(
-        'conversationId does not match any conversation',
-      );
+    if (!isDeletedConv) {
+      throw new NotFoundException('conversation does not exist');
     }
 
-    return isDeleted;
+    return isDeletedConv;
   }
 }

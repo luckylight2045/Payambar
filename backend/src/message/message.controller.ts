@@ -17,12 +17,9 @@ export class MessageController {
     return await this.messageService.clearHistory(conversationId);
   }
 
-  @Delete(':messageId/:convId')
-  async deleteMessage(
-    @Param('messageId') messageId: string,
-    @Param('convId') conversationId: string,
-  ) {
-    return await this.messageService.deleteMessage(messageId, conversationId);
+  @Delete(':messageId')
+  async deleteMessage(@Param('messageId') messageId: string) {
+    return await this.messageService.deleteMessage(messageId);
   }
 
   @Patch(':id')
