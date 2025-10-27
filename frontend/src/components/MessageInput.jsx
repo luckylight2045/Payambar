@@ -184,101 +184,145 @@ const uploadFileAndSend = async (file) => {
   // Render
   // -------------------
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexDirection: replyTarget ? 'column' : 'row' }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: replyTarget ? 'column' : 'row',
+        alignItems: replyTarget ? 'stretch' : 'center', // IMPORTANT: stretch children in reply mode
+        gap: 8,
+        width: '100%',
+      }}
+    >
       {replyTarget ? (
-        <div style={{ width: '100%', padding: '8px 10px', borderRadius: 10, background: 'rgba(255,255,255,0.02)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div
+          style={{
+            width: '100%',
+            padding: '8px 10px',
+            borderRadius: 10,
+            background: 'rgba(255,255,255,0.02)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: 8,
+          }}
+        >
+          <div
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+            }}
+          >
             <div style={{ fontSize: 12, fontWeight: 700 }}>{replySenderName ?? 'Replied'}</div>
-            <div style={{ fontSize: 12, color: '#9aa8b8' }}>{String(replyTarget.content ?? '').split('\n')[0].slice(0, 200)}{(replyTarget.content && String(replyTarget.content).length > 200) ? '…' : ''}</div>
+            <div style={{ fontSize: 12, color: '#9aa8b8' }}>
+              {String(replyTarget.content ?? '').split('\n')[0].slice(0, 200)}
+              {(replyTarget.content && String(replyTarget.content).length > 200) ? '…' : ''}
+            </div>
           </div>
-          <button aria-label="Cancel reply" onClick={() => onCancelReply()} style={{ marginLeft: 12, border: 'none', background: 'transparent', color: '#9aa8b8', cursor: 'pointer' }}>✕</button>
+          <button
+            aria-label="Cancel reply"
+            onClick={() => onCancelReply()}
+            style={{ marginLeft: 12, border: 'none', background: 'transparent', color: '#9aa8b8', cursor: 'pointer' }}
+          >
+            ✕
+          </button>
         </div>
       ) : null}
 
-      {/* Hidden file input */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*,video/*"
-        style={{ display: 'none' }}
-        onChange={handleFileInputChange}
-      />
+      {/* Controls row — always full width so textarea stays normal-sized */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*,video/*"
+          style={{ display: 'none' }}
+          onChange={handleFileInputChange}
+        />
 
-      {/* Left file button */}
-      <button
-        type="button"
-        onClick={onPickFileClick}
-        title="Attach image / video"
-        style={{
-          width: 40,
-          height: 40,
-          borderRadius: 10,
-          border: '1px solid rgba(255,255,255,0.04)',
-          background: 'transparent',
-          color: 'inherit',
-          cursor: 'pointer',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-        }}
-        disabled={uploading}
-      >
-        {uploading ? '…' : '📎'}
-      </button>
+        {/* Left file button */}
+        <button
+          type="button"
+          onClick={onPickFileClick}
+          title="Attach image / video"
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 10,
+            border: '1px solid rgba(255,255,255,0.04)',
+            background: 'transparent',
+            color: 'inherit',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            alignSelf: 'center', // don't stretch the button
+          }}
+          disabled={uploading}
+        >
+          {uploading ? '…' : '📎'}
+        </button>
 
-      {/* Multiline textarea: Shift+Enter => newline, Enter => send */}
-      <textarea
-        value={value}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder}
-        rows={1}
-        style={{
-          flex: 1,
-          padding: '10px 12px',
-          borderRadius: 12,
-          border: '1px solid rgba(255,255,255,0.04)',
-          background: 'rgba(255,255,255,0.02)',
-          color: 'inherit',
-          outline: 'none',
-          resize: 'vertical',
-          minHeight: 40,
-          maxHeight: 200,
-        }}
-      />
+        {/* Multiline textarea: Shift+Enter => newline, Enter => send */}
+        <textarea
+          value={value}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          rows={1}
+          style={{
+            flex: 1,
+            width: '100%',        // ensure full width when parent is column + stretch
+            padding: '10px 12px',
+            borderRadius: 12,
+            border: '1px solid rgba(255,255,255,0.04)',
+            background: 'rgba(255,255,255,0.02)',
+            color: 'inherit',
+            outline: 'none',
+            resize: 'vertical',
+            minHeight: 40,
+            maxHeight: 200,
+            boxSizing: 'border-box',
+          }}
+        />
 
-      <button
-        type="button"
-        onClick={async () => {
-          const content = value.trim();
-          if (!content) {
+        <button
+          type="button"
+          onClick={async () => {
+            const content = value.trim();
+            if (!content) {
+              setValue('');
+              clearTyping();
+              return;
+            }
             setValue('');
             clearTyping();
-            return;
-          }
-          setValue('');
-          clearTyping();
-          try {
-            await sendMessage(content, { replyTo: replyIdToSend });
-            try { onCancelReply(); } catch {}
-          } catch (err) {
-            console.error('sendMessage failed', err && (err.message || err));
-          }
-        }}
-        style={{
-          background: 'linear-gradient(180deg,#2b6ef6,#1e4fd8)',
-          color: '#fff',
-          padding: '10px 14px',
-          borderRadius: 8,
-          border: 'none',
-          cursor: 'pointer',
-          flexShrink: 0,
-        }}
-        disabled={uploading}
-      >
-        Send
-      </button>
+            try {
+              await sendMessage(content, { replyTo: replyIdToSend });
+              try { onCancelReply(); } catch {}
+            } catch (err) {
+              console.error('sendMessage failed', err && (err.message || err));
+            }
+          }}
+          style={{
+            background: 'linear-gradient(180deg,#2b6ef6,#1e4fd8)',
+            color: '#fff',
+            padding: '10px 14px',
+            borderRadius: 8,
+            border: 'none',
+            cursor: 'pointer',
+            flexShrink: 0,
+          }}
+          disabled={uploading}
+        >
+          Send
+        </button>
+      </div>
     </div>
   );
+
 }

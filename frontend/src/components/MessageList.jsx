@@ -651,6 +651,14 @@ export default function MessageList({
     }
     return null;
   })() : null}
+
+  {/* Edited label - show if backend/frontend marked message as edited */}
+{wasEdited ? (
+  <div style={{ marginTop: 6, display: 'flex', justifyContent: 'flex-end' }}>
+    <span className="edited-label">Edited</span>
+  </div>
+) : null}
+
 </div>
 
                 {mine ? (
