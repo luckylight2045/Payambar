@@ -245,6 +245,42 @@ export default function MessageList({
     }
   };
 
+  // --- add copy-to-clipboard helper ---
+const copyMessageText = async (message) => {
+  if (!message) return;
+  const text = message.content ?? '';
+  if (!text) {
+    // nothing to copy
+    closeMessageContextMenu();
+    return;
+  }
+
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(String(text));
+    } else {
+      // fallback for older browsers
+      const ta = document.createElement('textarea');
+      ta.value = String(text);
+      // avoid scrolling to bottom
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+
+    // optional user feedback - small native alert (replace with toast if you have one)
+    // alert('Message copied');
+  } catch (err) {
+    console.error('copy failed', err && (err.message || err));
+  } finally {
+    closeMessageContextMenu();
+  }
+};
+
+
   // Edit flow
   const onRequestEdit = () => {
     if (!ctxTargetMessage) return;
@@ -694,6 +730,21 @@ export default function MessageList({
           </div>
 
           <div style={{ height: 6 }} />
+
+          {/* Copy text (only if message has textual content) */}
+          {ctxTargetMessage && ctxTargetMessage.content ? (
+          <div
+            style={menuItemStyle}
+            onClick={() => {
+              try { copyMessageText(ctxTargetMessage); } catch (e) { /* swallow */ }
+            }}
+          >
+            📋 Copy text
+          </div>
+        ) : null}
+
+        <div style={{ height: 6 }} />
+
 
           {isMessageMine(ctxTargetMessage.senderId) ? (
             <>
