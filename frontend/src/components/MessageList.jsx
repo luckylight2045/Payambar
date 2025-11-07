@@ -68,14 +68,14 @@ export default function MessageList({
   const [editValue, setEditValue] = useState('');
 
   // lightbox state for image preview
-const [lightboxUrl, setLightboxUrl] = useState(null); // string | null
+// Lightbox / image preview state & handlers
+const [lightboxUrl, setLightboxUrl] = useState(null); // string|null
 const [lightboxOpen, setLightboxOpen] = useState(false);
 
 const openLightbox = (url) => {
   if (!url) return;
   setLightboxUrl(url);
   setLightboxOpen(true);
-  // lock body scroll
   try { document.body.style.overflow = 'hidden'; } catch {}
 };
 
@@ -84,6 +84,15 @@ const closeLightbox = () => {
   setLightboxUrl(null);
   try { document.body.style.overflow = ''; } catch {}
 };
+
+// close on ESC
+useEffect(() => {
+  if (!lightboxOpen) return;
+  const onKey = (e) => { if (e.key === 'Escape') closeLightbox(); };
+  window.addEventListener('keydown', onKey);
+  return () => window.removeEventListener('keydown', onKey);
+}, [lightboxOpen]);
+
 
 // handle ESC to close
 useEffect(() => {
