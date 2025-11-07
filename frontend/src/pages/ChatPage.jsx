@@ -1154,17 +1154,12 @@ const sendMessage = async (content, opts = {}) => {
   
     try {
       // debug log
-      console.log('[ChatPage] deleting message', { messageId, loadedConvId });
   
       // NEW route: DELETE /messages/:messageId
       const res = await axios.delete(
         `http://localhost:3000/messages/${encodeURIComponent(messageId)}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
-
-      console.log('delete message')
-  
-      console.log('[ChatPage] delete response', res.status, res.data);
   
       // Remove from UI regardless of exact server response shape (keeps UI consistent)
       setMessages((prev) => (prev || []).filter((m) => String(m._id ?? m.id ?? '') !== String(messageId)));

@@ -23,6 +23,9 @@ export class MessageService {
       content: data.content,
       messageType: data.messageType || MessageType.TEXT,
       replyTo: data.replyTo ? new Types.ObjectId(String(data.replyTo)) : null,
+      attachmentKey: data.attachmentKey || null,
+      publicUrl: data.publicUrl || null,
+      originalName: data.originalName || null,
     });
     return await message.save();
   }
@@ -78,7 +81,6 @@ export class MessageService {
   }
 
   async deleteMessage(messageId: string) {
-    console.log('delete message section');
     const isDeleted = await this.message.deleteOne({
       _id: messageId,
     });

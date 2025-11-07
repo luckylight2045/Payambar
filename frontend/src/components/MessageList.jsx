@@ -23,14 +23,22 @@ import PropTypes from 'prop-types';
 
 
 const resolveAttachmentUrl = (m) => {
+  console.log('[MessageItem] render message:', m);
   if (!m) return null;
   if (m.publicUrl) return m.publicUrl;
   if (m.attachmentUrl) return m.attachmentUrl;
 
-  const base = import.meta?.env?.VITE_UPLOAD_BASE ?? ''; // e.g. https://s3.ir-thr-at1.arvanstorage.ir/payambar
+  const base = import.meta?.env?.VITE_UPLOAD_BASE ?? '';
   if (m.attachmentKey && base) {
-    return `${base.replace(/\/$/, '')}/${m.attachmentKey}`;
+    // ensure no duplicate slashes
+    return `${base.replace(/\/$/, '')}/${String(m.attachmentKey).replace(/^\//, '')}`;
   }
+
+  // last resort: if server returns 'key' under another name
+  if (m.key && base) {
+    return `${base.replace(/\/$/, '')}/${String(m.key).replace(/^\//, '')}`;
+  }
+
   return null;
 };
 export default function MessageList({
@@ -58,6 +66,35 @@ export default function MessageList({
   // editing state
   const [editingId, setEditingId] = useState(null);
   const [editValue, setEditValue] = useState('');
+
+  // lightbox state for image preview
+const [lightboxUrl, setLightboxUrl] = useState(null); // string | null
+const [lightboxOpen, setLightboxOpen] = useState(false);
+
+const openLightbox = (url) => {
+  if (!url) return;
+  setLightboxUrl(url);
+  setLightboxOpen(true);
+  // lock body scroll
+  try { document.body.style.overflow = 'hidden'; } catch {}
+};
+
+const closeLightbox = () => {
+  setLightboxOpen(false);
+  setLightboxUrl(null);
+  try { document.body.style.overflow = ''; } catch {}
+};
+
+// handle ESC to close
+useEffect(() => {
+  if (!lightboxOpen) return;
+  const onKey = (e) => {
+    if (e.key === 'Escape') closeLightbox();
+  };
+  window.addEventListener('keydown', onKey);
+  return () => window.removeEventListener('keydown', onKey);
+}, [lightboxOpen]);
+
 
   // compute deterministic key for a message
   const messageKey = (m, idx) => {
@@ -229,7 +266,6 @@ export default function MessageList({
       return;
     }
     const id = ctxTargetMessage._id ?? ctxTargetMessage.id;
-    console.log('[MessageList] confirmDelete -> messageId:', id, 'ctxTargetMessage:', ctxTargetMessage);
   
     try {
       if (onDeleteMessage) {
@@ -421,15 +457,20 @@ const copyMessageText = async (message) => {
     if (!m) return null;
     if (m.publicUrl) return m.publicUrl;
     if (m.attachmentUrl) return m.attachmentUrl;
-
-    const base =
-      import.meta?.env?.VITE_UPLOAD_BASE || ''; // e.g. https://s3.ir-thr-at1.arvanstorage.ir/payambar
-
+  
+    const base = import.meta?.env?.VITE_UPLOAD_BASE ?? ''; // e.g. https://s3.ir-thr-at1.arvanstorage.ir/payambar
     if (m.attachmentKey && base) {
-      return `${base.replace(/\/$/, '')}/${m.attachmentKey}`;
+      // ensure no duplicate slashes
+      return `${base.replace(/\/$/, '')}/${String(m.attachmentKey).replace(/^\//, '')}`;
     }
+  
+    // last resort: if server returns 'key' under another name
+    if (m.key && base) {
+      return `${base.replace(/\/$/, '')}/${String(m.key).replace(/^\//, '')}`;
+    }
+  
     return null;
-};
+  };
 
 
 
@@ -572,105 +613,127 @@ const copyMessageText = async (message) => {
     whiteSpace: 'pre-wrap',
   }}
 >
-  {/* Attachment preview (image/video) */}
-  {m.messageType === 'image' || (m.attachmentKey || m.publicUrl) ? (() => {
-    const url = resolveAttachmentUrl(m);
-    if (url && (m.messageType === 'image' || /\.(jpe?g|png|gif|webp|svg)(\?.*)?$/.test(url))) {
-      return (
-        <div style={{ marginBottom: (m.content ? 8 : 0) }}>
+  {/* --- Unified attachment + content renderer (single place) --- */}
+  {(() => {
+  const attUrl = resolveAttachmentUrl(m);
+  const type = (m.messageType || '').toLowerCase();
+  const filename = m.originalName || m.content || (m.attachmentKey || '').split('/').pop() || '';
+  const showCaption = filename && filename !== '' && filename !== (m.content || '');
+
+  // shared wrapper style for the media block so it looks like a single "block"
+  const mediaBlockStyle = {
+    borderRadius: 12,
+    overflow: 'hidden',
+    background: mine ? 'transparent' : 'transparent',
+    boxShadow: '0 6px 18px rgba(2,6,23,0.25)',
+    display: 'inline-block',
+  };
+
+  // IMAGE
+  if (
+    attUrl &&
+    (type === 'image' || /\.(jpe?g|png|gif|webp|svg|avif|bmp)(\?.*)?$/i.test(attUrl))
+  ) {
+    return (
+      <div style={{ marginBottom: (showCaption ? 8 : (m.content ? 8 : 0)) }}>
+        <div style={mediaBlockStyle}>
           <img
-            src={url}
-            alt={m.content ?? 'image'}
+            src={attUrl}
+            alt={filename || 'image'}
             style={{
               display: 'block',
               maxWidth: '100%',
               maxHeight: 420,
-              borderRadius: 8,
+              width: '100%',
               objectFit: 'cover',
             }}
             loading="lazy"
-            onError={(e) => {
-              // show fallback text if img fails
-              try { e.currentTarget.style.display = 'none'; } catch {}
-            }}
+            onClick={() => openLightbox(attUrl)}
+            onError={(e) => { try { e.currentTarget.style.display = 'none'; } catch {} }}
           />
         </div>
-      );
-    }
-    // video fallback (if messageType === 'video' or url ends with common video ext)
-    if (url && (m.messageType === 'video' || /\.(mp4|webm|ogg)(\?.*)?$/.test(url))) {
-      return (
-        <div style={{ marginBottom: (m.content ? 8 : 0) }}>
+
+        {/* Caption / filename block — styled to look like a separate line under the media */}
+        {showCaption ? (
+          <div style={{
+            marginTop: 8,
+            padding: '8px 10px',
+            borderRadius: 8,
+            background: 'rgba(0,0,0,0.04)',
+            color: 'var(--muted, #9aa8b8)',
+            fontSize: 13,
+            maxWidth: '100%',
+            wordBreak: 'break-word'
+          }}>
+            {filename}
+          </div>
+        ) : (m.content && !attUrl ? (
+          <div style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>{m.content}</div>
+        ) : null)}
+      </div>
+    );
+  }
+
+  // VIDEO
+  if (
+    attUrl &&
+    (type === 'video' || /\.(mp4|webm|ogg|mov|mkv)(\?.*)?$/i.test(attUrl))
+  ) {
+    return (
+      <div style={{ marginBottom: (showCaption ? 8 : (m.content ? 8 : 0)) }}>
+        <div style={mediaBlockStyle}>
           <video
-            src={url}
+            src={attUrl}
             controls
-            style={{ display: 'block', maxWidth: '100%', maxHeight: 480, borderRadius: 8 }}
+            style={{ display: 'block', maxWidth: '100%', maxHeight: 480, width: '100%' }}
           />
         </div>
-      );
-    }
-    // if message type set to 'image' but no url available, fallthrough to showing filename below
-    return null;
-  })() : null}
 
-  {/* Caption / text content (for images or plain messages) */}
-{/* --- REPLACE WITH THIS --- */}
-{(() => {
-  const attUrl = resolveAttachmentUrl(m);
-  const type = (m.messageType || '').toLowerCase();
-
-  // Image detection by messageType or extension
-  if (
-    attUrl &&
-    (type === 'image' || /\.(jpe?g|png|gif|webp|bmp|avif)(\?.*)?$/i.test(attUrl))
-  ) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: 6 }}>
-        <img
-          src={attUrl}
-          alt={m.originalName ?? 'image'}
-          style={{
+        {showCaption ? (
+          <div style={{
+            marginTop: 8,
+            padding: '8px 10px',
+            borderRadius: 8,
+            background: 'rgba(0,0,0,0.04)',
+            color: 'var(--muted, #9aa8b8)',
+            fontSize: 13,
             maxWidth: '100%',
-            width: '320px',
-            maxHeight: '420px',
-            objectFit: 'cover',
-            borderRadius: 12,
-            display: 'block',
-            boxShadow: '0 6px 20px rgba(0,0,0,0.35)',
-          }}
-          onError={(e) => { e.currentTarget.style.display = 'none'; }}
-        />
+            wordBreak: 'break-word'
+          }}>
+            {filename}
+          </div>
+        ) : (m.content && !attUrl ? (
+          <div style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>{m.content}</div>
+        ) : null)}
       </div>
     );
   }
 
-  // Video detection
-  if (
-    attUrl &&
-    (type === 'video' || /\.(mp4|webm|ogg)(\?.*)?$/i.test(attUrl))
-  ) {
+  // Non-media attachments -> show a download/link block + name
+  if (m.messageType && m.messageType !== 'text' && attUrl) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: 6 }}>
-        <video
-          src={attUrl}
-          controls
-          style={{
-            maxWidth: '100%',
-            width: '420px',
-            maxHeight: '420px',
-            borderRadius: 12,
-            display: 'block',
-            background: '#000',
-          }}
-        />
+      <div style={{ marginTop: 6 }}>
+        <div style={{
+          padding: '8px 10px',
+          borderRadius: 8,
+          background: 'rgba(0,0,0,0.04)',
+          color: 'var(--muted, #9aa8b8)',
+          display: 'inline-flex',
+          gap: 10,
+          alignItems: 'center'
+        }}>
+          <a href={attUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>
+            {filename ? `Download ${filename}` : 'Download file'}
+          </a>
+        </div>
       </div>
     );
   }
 
-  // Fallback: show text message
+  // Final fallback: plain text content
   return (m.content ? <div style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>{m.content}</div> : null);
 })()}
-{/* --- end replacement --- */}
+
 
 
   {/* If there's an attachment but it's not image/video, show a downloadable link */}
@@ -762,6 +825,57 @@ const copyMessageText = async (message) => {
           <div style={{ ...menuItemStyle, color: '#9aa8b8' }} onClick={() => closeMessageContextMenu()}>Close</div>
         </div>
       ) : null}
+
+{/* Lightbox overlay */}
+{lightboxOpen && lightboxUrl ? (
+  <div
+    onClick={(e) => {
+      // only close when clicking the backdrop, not the image
+      if (e.target === e.currentTarget) closeLightbox();
+    }}
+    style={{
+      position: 'fixed',
+      left: 0,
+      top: 0,
+      right: 0,
+      bottom: 0,
+      zIndex: 12000,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: 'rgba(2,6,23,0.85)',
+      padding: 20,
+    }}
+    aria-hidden={!lightboxOpen}
+  >
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        maxWidth: 'calc(100% - 40px)',
+        maxHeight: 'calc(100% - 40px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <img
+        src={lightboxUrl}
+        alt="preview"
+        style={{
+          maxWidth: '100%',
+          maxHeight: '100%',
+          borderRadius: 12,
+          boxShadow: '0 12px 48px rgba(0,0,0,0.6)',
+          objectFit: 'contain',
+          cursor: 'zoom-out'
+        }}
+        onClick={(e) => { /* optional: click image to close */ }}
+      />
+    </div>
+  </div>
+) : null}
 
 
       {/* Confirm delete popup (two-step) */}

@@ -553,7 +553,7 @@ export class ChatGateway
           conversationId: data.conversationId,
           replyTo: data.replyTo ?? undefined,
           publicUrl: data.publicUrl ?? undefined,
-          attachMentKey: data.attachMentKey ?? undefined,
+          attachmentKey: data.attachmentKey ?? undefined,
           originalName: data.originalName ?? undefined,
         });
       } else {
@@ -567,7 +567,7 @@ export class ChatGateway
           senderId,
           participantIds: participantIdsToCreate,
           publicUrl: data.publicUrl ?? undefined,
-          attachMentKey: data.attachMentKey ?? undefined,
+          attachmentKey: data.attachmentKey ?? undefined,
           originalName: data.originalName ?? undefined,
         });
       }
@@ -583,11 +583,8 @@ export class ChatGateway
           : (convField ?? ''),
       );
       if (convId) {
-        this.server.to(convId).emit('message_sent', savedMessage);
-        this.server.emit('message_event', {
-          conversationId: convId,
-          message: savedMessage,
-        });
+        client.emit('message_sent', savedMessage);
+        client.to(convId).emit('message_sent', savedMessage);
       } else {
         client.emit('error', 'Failed to determine conversation id');
       }

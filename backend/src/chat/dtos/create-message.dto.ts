@@ -29,7 +29,7 @@ export class CreateMessageDto {
 
   @IsOptional()
   @IsString()
-  attachMentKey?: string;
+  attachmentKey?: string;
 
   @IsOptional()
   @IsString()

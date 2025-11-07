@@ -43,7 +43,7 @@ export class Message {
   replyTo: Types.ObjectId;
 
   @Prop({ default: null })
-  attachMentKey: string;
+  attachmentKey: string;
 
   @Prop({ default: null })
   publicUrl: string;

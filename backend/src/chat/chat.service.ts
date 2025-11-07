@@ -52,7 +52,7 @@ export class ChatService {
         senderId,
         conversationId,
         replyTo: data.replyTo ?? undefined,
-        attachMentKey: data.attachMentKey ?? undefined,
+        attachmentKey: data.attachmentKey ?? undefined,
         publicUrl: data.publicUrl ?? undefined,
         originalName: data.originalName ?? undefined,
       });
@@ -103,7 +103,7 @@ export class ChatService {
       senderId,
       conversationId: conv._id.toString(),
       publicUrl: data.publicUrl ?? undefined,
-      attachMentKey: data.attachMentKey ?? undefined,
+      attachmentKey: data.attachmentKey ?? undefined,
       originalName: data.originalName ?? undefined,
     });
 

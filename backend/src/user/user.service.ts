@@ -23,7 +23,7 @@ export class UserService {
   ) {}
 
   async signup(body: UserSignUpDto) {
-    const salt = await bcrypt.genSalt(1043);
+    const salt = await bcrypt.genSalt(10);
     const hash = await bcrypt.hash(body.password, salt);
 
     if (await this.getUserByUserName(body.name)) {
@@ -113,7 +113,7 @@ export class UserService {
 
     let hash;
     if (body.password) {
-      const salt = await bcrypt.genSalt(1043);
+      const salt = await bcrypt.genSalt(10);
       hash = await bcrypt.hash(body.password, salt);
     }
 

@@ -23,7 +23,7 @@ export default function Signup() {
     setLoading(true);
     try {
       await axios.post('http://localhost:3000/users/signup', {
-        userName: username.trim(),
+        name: username.trim(),
         password,
         phoneNumber: phoneNumber.trim(),
         role,
