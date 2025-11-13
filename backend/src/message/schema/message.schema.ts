@@ -8,6 +8,7 @@ export enum MessageType {
   FILE = 'file',
   IMAGE = 'image',
   VIDEO = 'video',
+  AUDIO = 'audio',
 }
 
 @Schema({ timestamps: true })

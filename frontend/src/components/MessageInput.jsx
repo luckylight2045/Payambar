@@ -13,6 +13,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
  *  - replyTarget: { _id, id, content, senderId, senderName, ... } | null
  *  - onCancelReply() -> called when user cancels reply preview
  */
+
 export default function MessageInput({
   sendMessage,
   placeholder = 'Write a message…',
@@ -26,8 +27,14 @@ export default function MessageInput({
   const idleTimer = useRef(null);
   const IDLE_TIMEOUT_MS = 1500;
 
+  
+  
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
+
+  const [recorderState, setRecorderState] = useState('idle');
+  const mediaRecorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
 
   // prepare reply info
   const replySenderName = replyTarget
@@ -126,49 +133,97 @@ export default function MessageInput({
     } catch (e) {}
   };
 
-// REPLACE your old uploadFileAndSend with this implementation:
-const uploadFileAndSend = async (file) => {
-  if (!file) return;
-  setUploading(true);
-  try {
-    const fd = new FormData();
-    fd.append('file', file, file.name);
+  const uploadFileAndSend = async (file) => {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file, file.name);
 
-    // POST file to your backend (no CORS to Arvan directly from browser)
-    const resp = await fetch('http://localhost:3000/uploads/upload', {
-      method: 'POST',
-      body: fd,
-      // don't set Content-Type (browser sets multipart boundary)
-      credentials: 'include', // optional: include cookies if your server expects auth via cookie
-    });
+      const resp = await fetch('http://localhost:3000/uploads/upload', {
+        method: 'POST',
+        body: fd,
+        credentials: 'include', // optional: include cookies if your server expects auth via cookie
+      });
 
-    if (!resp.ok) {
-      throw new Error(`upload endpoint failed (${resp.status})`);
+      if (!resp.ok) {
+        throw new Error(`upload endpoint failed (${resp.status})`);
+      }
+
+      const data = await resp.json(); // { key, publicUrl }
+
+      const mime = file.type || '';
+      const messageType = mime.startsWith('image')
+      ? 'image'
+      : mime.startsWith('video')
+        ? 'video'
+        : mime.startsWith('audio')
+          ? 'audio'
+          : 'file';
+      await sendMessage(file.name || '', {
+        messageType,
+        attachmentKey: data.key,
+        originalName: file.name,
+        publicUrl: data.publicUrl,
+        replyTo: replyIdToSend, // if you support reply
+      });
+
+      try { onCancelReply(); } catch (e) { /* swallow */ }
+      } catch (err) {
+        console.error('File upload/send failed', err && (err.message || err));
+        alert('File upload/send failed: ' + (err && (err.message || 'unknown')));
+      } finally {
+        setUploading(false);
+      }
+  };
+
+  const startRecording = async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert('Recording not supported in this browser');
+      return;
     }
-
-    const data = await resp.json(); // { key, publicUrl }
-
-    // Determine messageType for the chat message
-    const mime = file.type || '';
-    const messageType = mime.startsWith('image') ? 'image' : mime.startsWith('video') ? 'video' : 'file';
-
-    // send message referencing the server-stored key/publicUrl
-    await sendMessage(file.name || '', {
-      messageType,
-      attachmentKey: data.key,
-      originalName: file.name,
-      publicUrl: data.publicUrl,
-      replyTo: replyIdToSend, // if you support reply
-    });
-
-    try { onCancelReply(); } catch (e) { /* swallow */ }
-  } catch (err) {
-    console.error('File upload/send failed', err && (err.message || err));
-    alert('File upload/send failed: ' + (err && (err.message || 'unknown')));
-  } finally {
-    setUploading(false);
-  }
-};
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordedChunksRef.current = [];
+      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      mediaRecorderRef.current = mr;
+  
+      mr.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) recordedChunksRef.current.push(ev.data);
+      };
+  
+      mr.onstop = async () => {
+        setRecorderState('processing');
+        try {
+          const blob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
+          const filename = `voice-${Date.now()}.webm`;
+          // convert blob -> file
+          const file = new File([blob], filename, { type: 'audio/webm' });
+          await uploadFileAndSend(file);
+        } catch (err) {
+          console.error('sending recorded audio failed', err);
+          alert('Failed to send recording');
+        } finally {
+          // stop tracks
+          try { stream.getTracks().forEach(t => t.stop()); } catch(e){}
+          setRecorderState('idle');
+        }
+      };
+  
+      mr.start();
+      setRecorderState('recording');
+    } catch (err) {
+      console.error('mic access denied or error', err);
+      alert('Could not access microphone');
+    }
+  };
+  
+  const stopRecording = () => {
+    const mr = mediaRecorderRef.current;
+    if (mr && mr.state === 'recording') {
+      mr.stop();
+    }
+  };  
 
 
   const handleFileInputChange = (e) => {
@@ -238,7 +293,7 @@ const uploadFileAndSend = async (file) => {
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*,video/*"
+          accept="audio/*,image/*,video/*"
           style={{ display: 'none' }}
           onChange={handleFileInputChange}
         />
@@ -266,6 +321,36 @@ const uploadFileAndSend = async (file) => {
         >
           {uploading ? '…' : '📎'}
         </button>
+
+        {/* Left file & record buttons */}
+<div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+  <button
+    type="button"
+    onClick={() => {
+      if (recorderState === 'idle') startRecording();
+      else if (recorderState === 'recording') stopRecording();
+    }}
+    title={recorderState === 'recording' ? 'Stop recording' : 'Record voice'}
+    style={{
+      width: 40,
+      height: 40,
+      borderRadius: 10,
+      border: '1px solid rgba(255,255,255,0.04)',
+      background: recorderState === 'recording' ? '#ff4d4d' : 'transparent',
+      color: 'inherit',
+      cursor: 'pointer',
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+    }}
+    disabled={uploading}
+  >
+    {recorderState === 'recording' ? '■' : '🎤'}
+  </button>
+</div>
+
+
 
         {/* Multiline textarea: Shift+Enter => newline, Enter => send */}
         <textarea

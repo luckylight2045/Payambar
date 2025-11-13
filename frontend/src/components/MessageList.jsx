@@ -41,6 +41,322 @@ const resolveAttachmentUrl = (m) => {
 
   return null;
 };
+
+
+// inside the MessageList file, above the return(...) or at top of function
+
+// format bytes helper
+const formatBytes = (bytes) => {
+  if (!bytes && bytes !== 0) return '';
+  const size = Number(bytes);
+  if (Number.isNaN(size)) return '';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 ** 2) return `${Math.round((size / 1024) * 10) / 10} KB`;
+  return `${Math.round((size / 1024 ** 2) * 10) / 10} MB`;
+};
+
+const formatTime = (s) => {
+  if (!s && s !== 0) return '';
+  const sec = Math.floor(Number(s) || 0);
+  const mm = Math.floor(sec / 60).toString().padStart(2, '0');
+  const ss = (sec % 60).toString().padStart(2, '0');
+  return `${mm}:${ss}`;
+};
+
+// Inline audio player component (keeps own state)
+function InlineAudioPlayer({ src, sizeBytes }) {
+  const audioRef = React.useRef(null);
+  const [playing, setPlaying] = React.useState(false);
+  const [progress, setProgress] = React.useState(0); // 0..1
+  const [duration, setDuration] = React.useState(0);
+
+  React.useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    const onTime = () => {
+      if (a.duration && !Number.isNaN(a.duration)) {
+        setProgress(a.currentTime / a.duration);
+      }
+    };
+    const onLoaded = () => {
+      setDuration(a.duration || 0);
+    };
+    const onEnded = () => {
+      setPlaying(false);
+      setProgress(0);
+      try { a.currentTime = 0; } catch {}
+    };
+    a.addEventListener('timeupdate', onTime);
+    a.addEventListener('loadedmetadata', onLoaded);
+    a.addEventListener('ended', onEnded);
+    return () => {
+      a.removeEventListener('timeupdate', onTime);
+      a.removeEventListener('loadedmetadata', onLoaded);
+      a.removeEventListener('ended', onEnded);
+    };
+  }, [src]);
+
+  const toggle = async () => {
+    const a = audioRef.current;
+    if (!a) return;
+    try {
+      if (playing) {
+        a.pause();
+        setPlaying(false);
+      } else {
+        // pause other audio tags on page (optional)
+        document.querySelectorAll('audio[data-chat-player]').forEach((el) => {
+          if (el !== a) try { el.pause(); } catch {}
+        });
+        await a.play();
+        setPlaying(true);
+      }
+    } catch (e) {
+      console.warn('audio play failed', e);
+      setPlaying(false);
+    }
+  };
+
+  // Compact nice audio player for voice notes
+function AudioPlayer({ src }) {
+  const audioRef = React.useRef(null);
+  const [playing, setPlaying] = React.useState(false);
+  const [progress, setProgress] = React.useState(0); // 0..1
+  const [duration, setDuration] = React.useState(0);
+
+  React.useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    const onTime = () => setProgress(a.currentTime / Math.max(1, a.duration || 1));
+    const onEnd = () => setPlaying(false);
+    const onLoaded = () => setDuration(a.duration || 0);
+    a.addEventListener('timeupdate', onTime);
+    a.addEventListener('ended', onEnd);
+    a.addEventListener('loadedmetadata', onLoaded);
+    return () => {
+      a.removeEventListener('timeupdate', onTime);
+      a.removeEventListener('ended', onEnd);
+      a.removeEventListener('loadedmetadata', onLoaded);
+    };
+  }, [src]);
+
+  const toggle = async () => {
+    const a = audioRef.current;
+    if (!a) return;
+    try {
+      if (a.paused) {
+        await a.play();
+        setPlaying(true);
+      } else {
+        a.pause();
+        setPlaying(false);
+      }
+    } catch (e) {
+      console.warn('playback failed', e);
+    }
+  };
+
+  const seek = (evt) => {
+    const a = audioRef.current;
+    if (!a) return;
+    const rect = evt.currentTarget.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (evt.clientX - rect.left) / rect.width));
+    a.currentTime = x * (a.duration || 0);
+    setProgress(x);
+  };
+
+  const fmt = (s) => {
+    if (!s || isNaN(s)) return '0:00';
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60).toString().padStart(2, '0');
+    return `${m}:${sec}`;
+  };
+
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      padding: '8px 12px',
+      borderRadius: 12,
+      background: 'rgba(0,0,0,0.04)',
+      maxWidth: 360,
+      minWidth: 160,
+    }}>
+      <button
+        onClick={toggle}
+        aria-label={playing ? 'Pause' : 'Play'}
+        style={{
+          width: 44,
+          height: 44,
+          borderRadius: 44,
+          border: 'none',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          background: playing ? 'linear-gradient(180deg,#2b6ef6,#1e4fd8)' : 'rgba(255,255,255,0.02)',
+          color: playing ? '#fff' : 'inherit',
+          flexShrink: 0,
+        }}
+      >
+        {playing ? '❚❚' : '▶'}
+      </button>
+
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {/* fake waveform / progress bar */}
+        <div
+          onClick={seek}
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress * 100)}
+          style={{
+            width: '100%',
+            height: 36,
+            borderRadius: 8,
+            overflow: 'hidden',
+            position: 'relative',
+            cursor: 'pointer',
+            background: 'linear-gradient(90deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.02) 100%)',
+            display: 'flex',
+            alignItems: 'center',
+            padding: '0 10px',
+            boxSizing: 'border-box',
+          }}
+        >
+          {/* decorative waveform stripes */}
+          <div style={{
+            position: 'absolute',
+            left: 10,
+            right: 10,
+            top: 8,
+            bottom: 8,
+            backgroundImage: 'repeating-linear-gradient(90deg, rgba(255,255,255,0.04) 0 2px, transparent 2px 6px)',
+            opacity: 0.9,
+            borderRadius: 6,
+            pointerEvents: 'none',
+          }} />
+          {/* progress overlay */}
+          <div style={{
+            position: 'absolute',
+            left: 10,
+            top: 8,
+            bottom: 8,
+            width: `${Math.round(progress * 100)}%`,
+            background: 'linear-gradient(90deg, rgba(43,110,246,0.9), rgba(30,79,216,0.9))',
+            borderRadius: 6,
+            pointerEvents: 'none',
+            transition: 'width 120ms linear',
+          }} />
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#9aa8b8' }}>
+          <div>{fmt(duration)}</div>
+          <div style={{ opacity: 0.9 }}>{/* optionally file size or timestamp */}</div>
+        </div>
+      </div>
+
+      <audio ref={audioRef} src={src} preload="metadata" style={{ display: 'none' }} />
+    </div>
+  );
+}
+
+
+  // progress bar click
+  const onSeek = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const frac = Math.max(0, Math.min(1, x / rect.width));
+    const a = audioRef.current;
+    if (a && a.duration) a.currentTime = a.duration * frac;
+    setProgress(frac);
+  };
+
+  // styles (you can adapt colors to your theme)
+  const bubbleStyle = {
+    display: 'flex',
+    gap: 12,
+    alignItems: 'center',
+    padding: '10px 14px',
+    borderRadius: 14,
+    background: 'linear-gradient(180deg,#2b6ef6,#1e4fd8)', // your blue
+    color: '#fff',
+    maxWidth: 420,
+    minWidth: 180,
+  };
+  const playBtnStyle = {
+    width: 44,
+    height: 44,
+    borderRadius: 44,
+    background: 'rgba(255,255,255,0.12)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    flexShrink: 0,
+  };
+  const triangle = {
+    width: 0,
+    height: 0,
+    borderLeft: '10px solid #fff',
+    borderTop: '6px solid transparent',
+    borderBottom: '6px solid transparent',
+    transform: playing ? 'translateX(1px)' : 'none',
+  };
+
+  const waveformStyle = {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+  };
+
+  const progressBg = {
+    height: 8,
+    background: 'rgba(255,255,255,0.16)',
+    borderRadius: 8,
+    overflow: 'hidden',
+    cursor: 'pointer',
+  };
+  const progressFg = {
+    height: '100%',
+    width: `${Math.round(progress * 100)}%`,
+    background: 'linear-gradient(90deg, rgba(255,255,255,0.95), rgba(255,255,255,0.55))',
+  };
+
+  const metaStyle = { display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, opacity: 0.95 };
+
+  return (
+    <div style={bubbleStyle}>
+      <div style={playBtnStyle} onClick={toggle} role="button" aria-label={playing ? 'Pause' : 'Play'}>
+        {playing ? (
+          // pause icon
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <rect x="3" y="4" width="5" height="16" rx="1" fill="#fff" />
+            <rect x="16" y="4" width="5" height="16" rx="1" fill="#fff" />
+          </svg>
+        ) : (
+          <div style={triangle} />
+        )}
+      </div>
+
+      <div style={waveformStyle}>
+        <div style={progressBg} onClick={onSeek} aria-hidden>
+          <div style={progressFg} />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'rgba(255,255,255,0.92)', fontSize: 12 }}>
+          <div>{formatTime(duration * progress)}</div>
+          <div>{sizeBytes ? formatBytes(sizeBytes) : formatTime(duration)}</div>
+        </div>
+      </div>
+
+      {/* hidden native audio element used to play audio, labelled for pausing other audio */}
+      <audio data-chat-player src={src} ref={audioRef} preload="metadata" style={{ display: 'none' }} />
+    </div>
+  );
+}
+
 export default function MessageList({
   messages = [],
   currentUserId,
@@ -527,6 +843,13 @@ const copyMessageText = async (message) => {
             // show edited label if backend uses isEdited OR local flag 'edited' set by frontend
             const wasEdited = !!(m.isEdited || m.edited);
 
+            const earlyAttUrl = resolveAttachmentUrl(m);
+            const earlyType = (m.messageType || '').toLowerCase();
+            const isAudio = !!(
+              earlyAttUrl &&
+              (earlyType === 'audio' || /\.(mp3|wav|ogg|m4a|webm)(\?.*)?$/i.test(earlyAttUrl))
+            );
+
             // If this message is being edited, render the edit input
             if (String(editingId) === String(messageId)) {
               return (
@@ -564,10 +887,12 @@ const copyMessageText = async (message) => {
                 style={{ marginBottom: 8, display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}
                 onContextMenu={(e) => openMessageContextMenu(e, m)}
               >
-                <div style={{ fontSize: 12, color: '#9aa8b8', marginBottom: 4, display: 'flex', gap: 8, alignItems: 'center' }} className="message-meta-compact">
-                  <strong style={{ marginRight: 8 }}>{mine ? 'You' : senderName}</strong>
-                  <span style={{ color: '#6b7280', fontSize: 11 }}>{m.createdAt ? formatTime(m.createdAt) : ''}</span>
-                </div>
+      {!isAudio ? (
+        <div style={{ fontSize: 12, color: '#9aa8b8', marginBottom: 4, display: 'flex', gap: 8, alignItems: 'center' }} className="message-meta-compact">
+          <strong style={{ marginRight: 8 }}>{mine ? 'You' : senderName}</strong>
+          <span style={{ color: '#6b7280', fontSize: 11 }}>{m.createdAt ? formatTime(m.createdAt) : ''}</span>
+        </div>
+      ) : null}
 
                 {m.replyTo ? (
                   <div
@@ -628,6 +953,7 @@ const copyMessageText = async (message) => {
   const type = (m.messageType || '').toLowerCase();
   const filename = m.originalName || m.content || (m.attachmentKey || '').split('/').pop() || '';
   const showCaption = filename && filename !== '' && filename !== (m.content || '');
+  const isVoiceNote = attUrl && /\.webm(\?.*)?$/i.test(attUrl) && (!m.content || m.content.trim() === '');
 
   // shared wrapper style for the media block so it looks like a single "block"
   const mediaBlockStyle = {
@@ -717,6 +1043,54 @@ const copyMessageText = async (message) => {
       </div>
     );
   }
+
+    // AUDIO
+    // detect common image/audio extensions once
+const isImageExt = attUrl && /\.(jpe?g|png|gif|webp|svg|avif|bmp)(\?.*)?$/i.test(attUrl);
+const isAudioExt = attUrl && /\.(mp3|wav|ogg|m4a|webm)(\?.*)?$/i.test(attUrl);
+
+// improved audio detection: prefer explicit messageType, but allow audio extensions;
+// avoid matching if URL is actually an image
+const isAudio = !!(
+  (type === 'audio' || isAudioExt) &&
+  !isImageExt &&
+  attUrl
+);
+
+if (isAudio) {
+  return (
+    <div style={{ marginBottom: (m.content ? 8 : 0) }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {/* Compact, styled audio player container */}
+        <div style={{
+          padding: '8px 10px',
+          borderRadius: 12,
+          background: 'rgba(0,0,0,0.04)',
+          display: 'flex',
+          alignItems: 'center',
+          boxShadow: '0 6px 18px rgba(2,6,23,0.08)',
+        }}>
+          <audio
+            src={attUrl}
+            controls
+            preload="none"
+            style={{ width: 220, height: 36, outline: 'none', background: 'transparent' }}
+          />
+        </div>
+
+        {/* optional small caption/text (keeps voice-note UI compact) */}
+        {m.content ? (
+          <div style={{ color: '#9aa8b8', fontSize: 13, maxWidth: '45%' }}>
+            {m.content}
+          </div>
+        ) : null}
+      </div>
+      {/* do NOT show filename/caption block for voice notes (keeps them compact) */}
+    </div>
+  );
+}
+
+  
 
   // Non-media attachments -> show a download/link block + name
   if (m.messageType && m.messageType !== 'text' && attUrl) {
