@@ -55,4 +55,8 @@ export class UserUpdateDto {
   @IsString()
   @IsOptional()
   email: string;
+
+  @IsString()
+  @IsOptional()
+  avatar: string;
 }

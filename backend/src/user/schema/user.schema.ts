@@ -17,6 +17,9 @@ export class User {
   firstName: string;
 
   @Prop({ required: false })
+  avatar: string;
+
+  @Prop({ required: false })
   lastName: string;
 
   @Prop({ required: false, unique: true, sparse: true })
