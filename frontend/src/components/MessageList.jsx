@@ -3,6 +3,7 @@
 /* eslint-disable no-unused-vars */
 import React, { useEffect, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
+import VoicePlayer from './VoicePlayer';
 
 /**
  * MessageList
@@ -53,6 +54,48 @@ const formatBytes = (bytes) => {
   if (size < 1024) return `${size} B`;
   if (size < 1024 ** 2) return `${Math.round((size / 1024) * 10) / 10} KB`;
   return `${Math.round((size / 1024 ** 2) * 10) / 10} MB`;
+};
+
+const downloadAttachment = async (url, filename = 'file') => {
+  if (!url) {
+    console.warn('downloadAttachment: no url');
+    return;
+  }
+
+  try {
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = url;
+    a.download = filename || '';
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    return;
+  } catch (err) {
+    console.warn('direct download via anchor failed, will try fetch fallback', err);
+  }
+
+  try {
+    const resp = await fetch(url, { mode: 'cors' });
+    if (!resp.ok) throw new Error(`fetch failed: ${resp.status}`);
+    const blob = await resp.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = blobUrl;
+    a.download = filename || '';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      try { URL.revokeObjectURL(blobUrl); } catch (e) {}
+      try { document.body.removeChild(a); } catch (e) {}
+    }, 5000);
+    return;
+  } catch (err) {
+    console.error('download fallback failed', err);
+    alert('Could not download file — the server may not allow direct downloads (CORS).');
+  }
 };
 
 const formatTime = (s) => {
@@ -261,7 +304,6 @@ function AudioPlayer({ src }) {
     </div>
   );
 }
-
 
   // progress bar click
   const onSeek = (e) => {
@@ -1048,6 +1090,8 @@ const copyMessageText = async (message) => {
     // detect common image/audio extensions once
 const isImageExt = attUrl && /\.(jpe?g|png|gif|webp|svg|avif|bmp)(\?.*)?$/i.test(attUrl);
 const isAudioExt = attUrl && /\.(mp3|wav|ogg|m4a|webm)(\?.*)?$/i.test(attUrl);
+const isAudioAny = !!(attUrl && /\.(mp3|wav|ogg|m4a|webm)(\?.*)?$/i.test(attUrl) || (m.messageType || '').toLowerCase() === 'audio');
+
 
 // improved audio detection: prefer explicit messageType, but allow audio extensions;
 // avoid matching if URL is actually an image
@@ -1057,40 +1101,32 @@ const isAudio = !!(
   attUrl
 );
 
-if (isAudio) {
+if (isAudioAny && attUrl) {
   return (
     <div style={{ marginBottom: (m.content ? 8 : 0) }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        {/* Compact, styled audio player container */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: mine ? 'flex-end' : 'flex-start' }}>
         <div style={{
-          padding: '8px 10px',
           borderRadius: 12,
-          background: 'rgba(0,0,0,0.04)',
-          display: 'flex',
-          alignItems: 'center',
-          boxShadow: '0 6px 18px rgba(2,6,23,0.08)',
+          padding: isVoiceNote ? 8 : 10,
+          background: mine ? 'linear-gradient(135deg,#2b6ef6,#1e4fd8)' : '#0f2936',
+          color: mine ? '#fff' : '#e6eef6',
+          boxShadow: '0 8px 28px rgba(2,6,23,0.35)',
+          maxWidth: '90%',
         }}>
-          <audio
-            src={attUrl}
-            controls
-            preload="none"
-            style={{ width: 220, height: 36, outline: 'none', background: 'transparent' }}
-          />
+          {/* compact=true hides filename inside VoicePlayer (voice notes) */}
+          <VoicePlayer src={attUrl} mine={mine} compact={isVoiceNote} skipSeconds={5}/>
         </div>
-
-        {/* optional small caption/text (keeps voice-note UI compact) */}
-        {m.content ? (
-          <div style={{ color: '#9aa8b8', fontSize: 13, maxWidth: '45%' }}>
-            {m.content}
-          </div>
-        ) : null}
       </div>
-      {/* do NOT show filename/caption block for voice notes (keeps them compact) */}
+
+      {/* For non-voice audio files show a small download/name below (optional) */}
+      {!isVoiceNote && m.originalName ? (
+        <div style={{ marginTop: 6, color: '#9aa8b8', fontSize: 13, textAlign: mine ? 'right' : 'left' }}>
+          {m.originalName}
+        </div>
+      ) : null}
     </div>
   );
 }
-
-  
 
   // Non-media attachments -> show a download/link block + name
   if (m.messageType && m.messageType !== 'text' && attUrl) {
@@ -1189,8 +1225,33 @@ if (isAudio) {
           </div>
         ) : null}
 
-        <div style={{ height: 6 }} />
+{ /* Download attachment (images/videos/audios/files) */ }
+{(() => {
+  const m = ctxTargetMessage;
+  if (!m) return null;
+  const url = resolveAttachmentUrl(m) || m.publicUrl || null;
+  if (!url) return null;
+  const filename = m.originalName || m.content || (m.attachmentKey || '').split('/').pop() || 'file';
+  return (
+    <div
+      style={menuItemStyle}
+      onClick={() => {
+        try {
+          downloadAttachment(url, filename);
+        } catch (e) {
+          console.error('Download click failed', e);
+        } finally {
+          closeMessageContextMenu();
+        }
+      }}
+    >
+      ⬇️ Download
+    </div>
+  );
+})()}
 
+
+        <div style={{ height: 6 }} />
 
           {isMessageMine(ctxTargetMessage.senderId) ? (
             <>
